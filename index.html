@@ -26,6 +26,16 @@ body{background:var(--bg) radial-gradient(120% 60% at 50% 0%,#17303d 0%,var(--bg
 main{max-width:560px;margin:0 auto;padding-inline:16px;padding-block:20px calc(var(--tab-h) + 32px + env(safe-area-inset-bottom,0px))}
 h1,h2{font-family:var(--f-display);font-weight:700;letter-spacing:.01em;text-wrap:balance;margin:0}
 h1{font-size:1.7rem}
+.appbar{position:sticky;top:env(safe-area-inset-top,0px);z-index:25;display:flex;align-items:center;gap:10px;margin:-20px -16px 16px;padding:10px 16px;background:rgba(15,29,36,.94);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.appbar .brand{font-family:var(--f-display);font-size:1.05rem;font-weight:700}
+.appbar .ver{font-family:var(--f-mono);font-size:.75rem;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:99px;padding:.15rem .5rem}
+.appbar .sp{flex:1}
+.appbar button{padding:.45rem .75rem;font-size:.85rem;border-radius:99px;display:inline-flex;align-items:center;gap:6px}
+.appbar button.has-update{background:var(--accent);color:#2a1d00;border-color:transparent}
+.appbar button svg{width:16px;height:16px}
+.appbar button.spin svg{animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.toast{position:fixed;left:50%;bottom:calc(var(--tab-h) + 24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:50;background:var(--panel2);border:1px solid var(--line);color:var(--fg);padding:.6rem 1rem;border-radius:99px;font-weight:500;max-width:calc(100vw - 32px);text-align:center;white-space:nowrap}
 h2{font-size:1.15rem}
 .sub{color:var(--muted);margin:.25rem 0 0}
 .stack{display:flex;flex-direction:column;gap:16px}
@@ -144,6 +154,13 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
 </head>
 <body>
 <main>
+  <div class="appbar">
+    <span class="brand">ScanCartes</span>
+    <span class="ver" id="ver-badge"></span>
+    <span class="sp"></span>
+    <button id="btn-update" aria-label="Rechercher une mise à jour"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg><span id="btn-update-lbl">Mise à jour</span></button>
+  </div>
+  <div class="toast" id="toast" role="status" hidden></div>
   <!-- SCANNER -->
   <div class="update-bar" id="update-bar" hidden>
     <span id="update-text">Nouvelle version disponible</span>
@@ -151,7 +168,7 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
   </div>
   <section id="tab-scan" class="stack">
     <header>
-      <h1>ScanCartes</h1>
+      <h1>Scanner</h1>
       <p class="sub">Scanne un code-barres, tire une carte.</p>
     </header>
     <div class="viewer" id="viewer">
@@ -878,7 +895,7 @@ $("#btn-save-rates").addEventListener("click",()=>{
 renderRates();
 
 /* ---------- Version & mises à jour ---------- */
-const APP_VERSION="1.2.0";
+const APP_VERSION="1.2.1";
 function cmpVer(a,b){const x=a.split(".").map(Number),y=b.split(".").map(Number);for(let i=0;i<3;i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)-(y[i]||0)}return 0}
 async function checkUpdate(manual){
   const st=$("#update-status");
@@ -890,14 +907,27 @@ async function checkUpdate(manual){
     if(j.version&&cmpVer(j.version,APP_VERSION)>0){
       $("#update-text").textContent="Version "+j.version+" disponible"+(j.notes?" : "+j.notes:"");
       $("#update-bar").hidden=false;$("#btn-update-now").dataset.v=j.version;
+      latest=j.version;$("#btn-update").classList.add("has-update");$("#btn-update-lbl").textContent="Installer v"+j.version;
       if(manual)st.textContent="Version "+j.version+" disponible.";
     }else if(manual)st.textContent="Tu as la dernière version.";
   }catch(e){if(manual){st.className="status err";st.textContent="Impossible de vérifier. Vérifie ta connexion."}}
 }
 function applyUpdate(v){location.replace(location.pathname+"?v="+encodeURIComponent(v||Date.now()))}
 $("#app-version").textContent="v"+APP_VERSION;
+$("#ver-badge").textContent="v"+APP_VERSION;
+let latest=null,toastT=0;
+function toast(msg){const t=$("#toast");t.textContent=msg;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>t.hidden=true,2600)}
 $("#btn-check-update").addEventListener("click",()=>checkUpdate(true));
 $("#btn-update-now").addEventListener("click",e=>applyUpdate(e.currentTarget.dataset.v));
+$("#btn-update").addEventListener("click",async e=>{
+  const b=e.currentTarget;
+  if(latest){applyUpdate(latest);return}
+  b.classList.add("spin");
+  await checkUpdate(true);
+  b.classList.remove("spin");
+  if(latest)applyUpdate(latest);
+  else toast($("#update-status").textContent||"Tu as la dernière version.");
+});
 checkUpdate(false);
 document.addEventListener("visibilitychange",()=>{if(!document.hidden)checkUpdate(false)});
 

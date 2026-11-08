@@ -1,4 +1,4 @@
 {
-  "version": "1.2.0",
-  "notes": "recherche dans toutes les bases (livres, musique, animaux, Wikidata) + saisie si inconnu"
+  "version": "1.2.1",
+  "notes": "version et bouton de mise à jour toujours visibles"
 }
