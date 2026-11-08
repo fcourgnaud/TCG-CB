@@ -1,4 +1,4 @@
 {
-  "version": "1.9.0",
-  "notes": "réinitialisation de toutes les illustrations (administrateur)"
+  "version": "1.9.1",
+  "notes": "bouton d'effacement des illustrations protégé par mot de passe"
 }

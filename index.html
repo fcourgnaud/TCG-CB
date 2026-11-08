@@ -280,17 +280,13 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
       <p class="status" id="rates-status" role="status"></p>
     </div>
     <div class="panel">
-      <h2>Administration</h2>
-      <p class="hint" style="margin:0" id="admin-local">Efface les illustrations de ta collection. Elles seront régénérées à l'ouverture des cartes.</p>
-      <div class="stack" id="admin-form" style="gap:12px">
-        <p class="hint" style="margin:0">Supprime toutes les illustrations du registre mondial, pour tous les joueurs. Réservé au compte administrateur.</p>
-        <label for="admin-email">E-mail administrateur<input id="admin-email" type="email" autocomplete="username"></label>
-        <label for="admin-pass">Mot de passe<input id="admin-pass" type="password" autocomplete="current-password"></label>
-      </div>
-      <button class="danger" id="btn-admin-reset">Réinitialiser toutes les illustrations</button>
+      <h2>Réinitialisation</h2>
+      <p class="hint" style="margin:0" id="reset-hint"></p>
+      <label for="admin-pass">Mot de passe<input id="admin-pass" type="password" inputmode="numeric" autocomplete="off"></label>
+      <button class="danger" id="btn-admin-reset">Effacer toutes les illustrations</button>
       <div class="confirm" id="admin-confirm" hidden>
         <span>Toutes les illustrations déjà générées seront supprimées définitivement et régénérées au fil des scans. Les cartes et les collections sont conservées. Continuer ?</span>
-        <div class="row"><button class="danger" id="btn-admin-go">Oui, tout réinitialiser</button><button id="btn-admin-cancel">Annuler</button></div>
+        <div class="row"><button class="danger" id="btn-admin-go">Oui, tout effacer</button><button id="btn-admin-cancel">Annuler</button></div>
       </div>
       <p class="status" id="admin-status" role="status"></p>
     </div>
@@ -1213,7 +1209,7 @@ $("#btn-reset-rates").addEventListener("click",()=>saveRates({...DEFAULT_RATES})
 renderRates();
 
 /* ---------- Version & mises à jour ---------- */
-const APP_VERSION="1.9.0";
+const APP_VERSION="1.9.1";
 function cmpVer(a,b){const x=a.split(".").map(Number),y=b.split(".").map(Number);for(let i=0;i<3;i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)-(y[i]||0)}return 0}
 async function checkUpdate(manual){
   const st=$("#update-status");
@@ -1274,17 +1270,11 @@ async function clearLocalImages(){
   if(!$("#tab-col").hidden)renderGrid();
 }
 
-async function adminSignIn(email,password){
-  const r=await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${CFG.firebaseApiKey}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password,returnSecureToken:true})});
-  const j=await r.json().catch(()=>({}));
-  if(!r.ok){
-    const m=(j.error&&j.error.message)||"";
-    if(/INVALID_LOGIN_CREDENTIALS|INVALID_PASSWORD|EMAIL_NOT_FOUND/.test(m))throw new Error("E-mail ou mot de passe incorrect.");
-    if(/OPERATION_NOT_ALLOWED/.test(m))throw new Error("La connexion par e-mail n'est pas activée dans Firebase Authentication.");
-    if(/TOO_MANY_ATTEMPTS/.test(m))throw new Error("Trop de tentatives. Réessaie dans quelques minutes.");
-    throw new Error("Connexion impossible ("+(m||r.status)+").");
-  }
-  return {token:j.idToken,uid:j.localId};
+/* Mot de passe de réinitialisation : seule son empreinte SHA-256 est dans le code */
+const RESET_HASH="19500684bb3d77d0c54c9732e710c7440f3b408e98a4c88e48329db5af001e41";
+async function sha256(t){
+  const buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(t));
+  return [...new Uint8Array(buf)].map(x=>x.toString(16).padStart(2,"0")).join("");
 }
 async function listImageDocs(){
   const names=[];let page="";
@@ -1297,15 +1287,13 @@ async function listImageDocs(){
   }while(page);
   return names;
 }
-async function resetAllImages(email,password,onMsg){
-  if(!GLOBAL){await clearLocalImages();return "Images de ta collection effacées. Elles seront régénérées à l'ouverture des cartes."}
-  onMsg("Connexion…");
-  const {token,uid}=await adminSignIn(email,password);
-  const auth={Authorization:"Bearer "+token};
-  // 1. Vérifie les droits avant de toucher aux images : écriture de la nouvelle saison
+async function resetAllImages(onMsg){
+  if(!GLOBAL){await clearLocalImages();return "Illustrations de ta collection effacées. Elles seront régénérées à l'ouverture des cartes."}
+  // 1. Nouvelle saison : toutes les apps oublieront leurs images à la prochaine ouverture
+  onMsg("Réinitialisation…");
   const cur=await gGet("settings/global"),epoch=(cur&&cur.epoch?cur.epoch:0)+1;
-  const w=await fetch(`${FSB}/settings/global?key=${CFG.firebaseApiKey}`,{method:"PATCH",headers:{"Content-Type":"application/json",...auth},body:JSON.stringify(toFields({epoch,resetAt:Date.now()}))});
-  if(w.status===403)throw new Error("Ce compte n'est pas administrateur. Identifiant à autoriser dans les règles Firestore : "+uid);
+  const w=await fetch(`${FSB}/settings/global?key=${CFG.firebaseApiKey}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(toFields({epoch,resetAt:Date.now()}))});
+  if(w.status===403)throw new Error("Réinitialisation refusée : les règles Firestore ne sont pas à jour.");
   if(!w.ok)throw new Error("Réinitialisation refusée ("+w.status+").");
   // 2. Supprime toutes les illustrations du registre
   onMsg("Recherche des illustrations…");
@@ -1315,7 +1303,7 @@ async function resetAllImages(email,password,onMsg){
   async function worker(){
     while(queue.length){
       const n=queue.shift();
-      const r=await fetch(`https://firestore.googleapis.com/v1/${n}?key=${CFG.firebaseApiKey}`,{method:"DELETE",headers:auth}).catch(()=>null);
+      const r=await fetch(`https://firestore.googleapis.com/v1/${n}?key=${CFG.firebaseApiKey}`,{method:"DELETE"}).catch(()=>null);
       if(r&&r.ok)done++;else failed++;
       onMsg("Suppression des illustrations… "+(done+failed)+" / "+names.length);
     }
@@ -1323,28 +1311,23 @@ async function resetAllImages(email,password,onMsg){
   await Promise.all(Array.from({length:6},worker));
   // 3. Oublie les images locales
   await clearLocalImages();LS.set("sc_epoch",epoch);
-  return failed?`${done} illustrations supprimées, ${failed} en échec : relance la réinitialisation.`:`Réinitialisation terminée : ${done} illustration${done>1?"s":""} supprimée${done>1?"s":""}. Elles seront régénérées au fil des scans.`;
+  return failed?`${done} illustrations supprimées, ${failed} en échec : relance l'effacement.`:`Effacement terminé : ${done} illustration${done>1?"s":""} supprimée${done>1?"s":""}. Elles seront régénérées au fil des scans.`;
 }
 
-/* Interface (Réglages → Administration) */
-$("#admin-local").hidden=GLOBAL;$("#admin-form").hidden=!GLOBAL;
-function adminConfirm(){
+/* Interface (Réglages → Réinitialisation) */
+$("#reset-hint").textContent=GLOBAL?"Supprime toutes les illustrations du registre mondial, pour tous les joueurs.":"Efface les illustrations de ta collection.";
+$("#btn-admin-reset").addEventListener("click",async()=>{
   const st=$("#admin-status");st.className="status";st.textContent="";
-  const box=$("#admin-confirm");box.hidden=false;
-  $("#btn-admin-reset").hidden=true;
-}
-$("#btn-admin-reset").addEventListener("click",()=>{
-  if(GLOBAL&&(!$("#admin-email").value.trim()||!$("#admin-pass").value)){const st=$("#admin-status");st.className="status err";st.textContent="Saisis l'e-mail et le mot de passe du compte administrateur.";return}
-  adminConfirm();
+  let ok=false;try{ok=(await sha256($("#admin-pass").value.trim()))===RESET_HASH}catch(e){}
+  if(!ok){st.className="status err";st.textContent="Mot de passe incorrect.";return}
+  $("#admin-confirm").hidden=false;$("#btn-admin-reset").hidden=true;
 });
 $("#btn-admin-cancel").addEventListener("click",()=>{$("#admin-confirm").hidden=true;$("#btn-admin-reset").hidden=false});
 $("#btn-admin-go").addEventListener("click",async()=>{
   const st=$("#admin-status"),go=$("#btn-admin-go");
   go.disabled=true;$("#btn-admin-cancel").disabled=true;st.className="status";
-  try{
-    st.textContent=await resetAllImages($("#admin-email").value.trim(),$("#admin-pass").value,m=>{st.textContent=m});
-    $("#admin-pass").value="";
-  }catch(e){st.className="status err";st.textContent=e.message}
+  try{st.textContent=await resetAllImages(m=>{st.textContent=m});$("#admin-pass").value=""}
+  catch(e){st.className="status err";st.textContent=e.message}
   go.disabled=false;$("#btn-admin-cancel").disabled=false;
   $("#admin-confirm").hidden=true;$("#btn-admin-reset").hidden=false;
 });
