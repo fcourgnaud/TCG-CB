@@ -121,7 +121,11 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
 .chip i{width:9px;height:9px;transform:rotate(45deg);background:var(--f2);display:block}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 @media (min-width:520px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
-.grid button.cardbtn{padding:0;border:0;background:none;border-radius:12px;text-align:left}
+.grid button.cardbtn{position:relative;padding:0;border:0;background:none;border-radius:12px;text-align:left}
+.copies{position:absolute;top:-6px;right:-6px;background:var(--accent);color:#2a1d00;font:700 .8rem var(--f-mono);padding:.15rem .45rem;border-radius:99px;box-shadow:0 2px 6px rgba(0,0,0,.4)}
+.net{display:inline-flex;align-items:center;gap:6px}
+.net i{width:8px;height:8px;border-radius:50%;background:var(--muted);display:block}
+.net.on i{background:#5be38a}
 
 /* Overlay */
 .overlay{position:fixed;inset:0;z-index:40;background:rgba(5,12,16,.86);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:calc(16px + env(safe-area-inset-top,0px)) 16px calc(16px + env(safe-area-inset-bottom,0px));overflow-y:auto}
@@ -261,6 +265,7 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
         <button id="btn-check-update">Vérifier les mises à jour</button>
       </div>
       <p class="status" id="update-status" role="status"></p>
+      <span class="net hint" id="net-state"><i></i><span></span></span>
     </div>
     <div class="panel">
       <h2>Taux de drop (%)</h2>
@@ -279,6 +284,7 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
 
 <div class="overlay" id="overlay" hidden></div>
 
+<script src="config.js"></script>
 <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
 <script>
 "use strict";
@@ -535,8 +541,82 @@ ov.addEventListener("click",e=>{if(e.target===ov&&!ov.dataset.lock)closeOverlay(
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!ov.hidden&&!ov.dataset.lock)closeOverlay()});
 
 async function nextSerial(){const a=await allCards();return a.reduce((m,c)=>Math.max(m,c.serial||0),0)+1}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
-/* Tirage complet après un scan */
+/* ---------- Registre mondial (Firebase Firestore, API REST) ----------
+   Règle : le premier joueur qui scanne un produit fixe sa carte (nom, rareté, image).
+   Tous ceux qui scannent ensuite le même code reçoivent exactement cette carte.
+   La création du document est atomique : si deux joueurs scannent en même temps,
+   un seul obtient le droit de générer. */
+const CFG=window.SCANCARTES_CONFIG||{};
+const GLOBAL=!!(CFG.firebaseApiKey&&CFG.firebaseProjectId);
+const FS=GLOBAL?`https://firestore.googleapis.com/v1/projects/${encodeURIComponent(CFG.firebaseProjectId)}/databases/(default)/documents/cards`:"";
+const STALE=3*60*1000; // une génération bloquée plus de 3 min peut être reprise par un autre joueur
+
+function toFields(o){const f={};for(const[k,v]of Object.entries(o)){if(v==null)continue;f[k]=typeof v==="number"?{integerValue:String(Math.round(v))}:{stringValue:String(v)}}return{fields:f}}
+function fromDoc(d){const o={};for(const[k,v]of Object.entries(d.fields||{}))o[k]=v.stringValue!==undefined?v.stringValue:(v.integerValue!==undefined?Number(v.integerValue):null);o._updateTime=d.updateTime;return o}
+async function gGet(code){
+  const r=await fetch(`${FS}/${code}?key=${CFG.firebaseApiKey}`,{cache:"no-store"});
+  if(r.status===404)return null;
+  if(!r.ok)throw new Error("Registre mondial injoignable ("+r.status+").");
+  return fromDoc(await r.json());
+}
+async function gCreate(code,data){
+  const r=await fetch(`${FS}?documentId=${code}&key=${CFG.firebaseApiKey}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(toFields(data))});
+  if(r.status===409)return false;
+  if(!r.ok)throw new Error("Registre mondial : création refusée ("+r.status+").");
+  return true;
+}
+async function gPatch(code,data,updateTime){
+  const mask=Object.keys(data).map(k=>"updateMask.fieldPaths="+k).join("&");
+  const pre=updateTime?"currentDocument.updateTime="+encodeURIComponent(updateTime):"currentDocument.exists=true";
+  const r=await fetch(`${FS}/${code}?${mask}&${pre}&key=${CFG.firebaseApiKey}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(toFields(data))});
+  if(r.ok)return true;
+  if([400,403,409,412].includes(r.status))return false; // déjà remplie par un autre joueur, ou précondition
+  throw new Error("Registre mondial injoignable ("+r.status+").");
+}
+
+/* ---------- Collection locale : une entrée par produit, avec le nombre d'exemplaires ---------- */
+async function addToCollection(c){
+  const all=await allCards(),ex=all.find(x=>x.code===c.code);
+  if(ex){
+    ex.copies=(ex.copies||1)+1;ex.lastAt=Date.now();
+    if(GLOBAL)Object.assign(ex,{name:c.name,brand:c.brand,category:c.category,rarity:c.rarity,image:c.image||ex.image});
+    try{await putCard(ex)}catch(e){}
+    return ex;
+  }
+  const card={...c,copies:1,serial:await nextSerial(),createdAt:Date.now()};
+  try{card.id=await putCard(card)}catch(e){}
+  return card;
+}
+
+/* Obtenir l'image officielle d'une carte : la lire, la générer si c'est notre tour, ou attendre */
+function waitMsg(onMsg){return t=>onMsg(t>0?"Générateur gratuit : prochaine image dans "+t+" s…":"Génération de l'illustration…")}
+async function obtainImage(card,onMsg){
+  if(!GLOBAL)return generateImage(card,waitMsg(onMsg));
+  for(;;){
+    const g=await gGet(card.code);
+    if(!g)throw new Error("Cette carte n'est plus dans le registre mondial.");
+    if(g.status==="ready"&&g.image)return g.image;
+    const mine=!!card.claimedAt&&g.claimedAt===card.claimedAt;
+    const stale=Date.now()-(g.claimedAt||0)>STALE;
+    if(mine||stale){
+      if(!mine){
+        const now=Date.now();
+        if(!(await gPatch(card.code,{claimedAt:now},g._updateTime)))continue;
+        card.claimedAt=now;
+      }
+      onMsg("Génération de l'illustration…");
+      const img=await generateImage(card,waitMsg(onMsg));
+      if(await gPatch(card.code,{image:img,status:"ready"}))return img;
+      continue; // un autre joueur a terminé avant : on relit sa version
+    }
+    onMsg("Un autre joueur est en train de générer cette carte… ("+Math.round((Date.now()-g.claimedAt)/1000)+" s)");
+    await sleep(4000);
+  }
+}
+
+/* ---------- Scan → carte ---------- */
 let drawing=false;
 async function draw(code){
   if(drawing)return;
@@ -545,98 +625,132 @@ async function draw(code){
   if(![8,12,13,14].includes(code.length)){status.className="status err";status.textContent="Code invalide : il faut 8, 12, 13 ou 14 chiffres.";return}
   $("#unknown").hidden=true;
   drawing=true;
-  status.className="status";status.textContent="Recherche du produit "+code+"…";
-  let p=null,searching=true;
-  try{p=await lookup(code,(d,n)=>{if(searching)status.textContent="Recherche du produit "+code+"… ("+d+"/"+n+" bases)"})}finally{drawing=false;searching=false}
-  if(!p){
-    status.className="status err";status.textContent="Introuvable dans "+SOURCES.filter(s=>!s.only||s.only(code)).map(s=>s.label).join(", ")+".";
-    $("#unknown-code").textContent=code;$("#unknown").dataset.code=code;$("#unknown").hidden=false;$("#unknown-name").value="";$("#unknown-brand").value="";
-    $("#unknown-name").focus();
-    return;
+  try{
+    // 1. La carte existe déjà ?
+    status.className="status";
+    if(GLOBAL){
+      status.textContent="Recherche dans le registre mondial…";
+      let g;
+      try{g=await gGet(code)}catch(e){status.className="status err";status.textContent=e.message+" Réessaie quand tu as du réseau.";return}
+      if(g){status.textContent="";return revealExisting(code,g)}
+    }else{
+      const mine=(await allCards()).find(c=>c.code===code);
+      if(mine){status.textContent="";return revealExisting(code,mine)}
+    }
+    // 2. Produit jamais scanné : on cherche ce que c'est
+    status.textContent="Recherche du produit "+code+"…";
+    let p=null,searching=true;
+    try{p=await lookup(code,(d,n)=>{if(searching)status.textContent="Recherche du produit "+code+"… ("+d+"/"+n+" bases)"})}finally{searching=false}
+    if(!p){
+      status.className="status err";status.textContent="Introuvable dans "+SOURCES.filter(s=>!s.only||s.only(code)).map(s=>s.label).join(", ")+".";
+      $("#unknown-code").textContent=code;$("#unknown").dataset.code=code;$("#unknown").hidden=false;$("#unknown-name").value="";$("#unknown-brand").value="";
+      $("#unknown-name").focus();
+      return;
+    }
+    status.textContent="";
+    await discover(code,p);
+  }finally{drawing=false}
+}
+
+/* Premier scan au monde : on réserve la carte, on tire la rareté, on génère */
+async function discover(code,p){
+  const now=Date.now(),rarity=roll();
+  const base={code,name:p.name,brand:p.brand||"",category:p.category||"",source:p.source||""};
+  if(GLOBAL){
+    let ok;
+    try{ok=await gCreate(code,{...base,rarity,status:"pending",createdAt:now,claimedAt:now})}
+    catch(e){const s=$("#status");s.className="status err";s.textContent=e.message;return}
+    if(!ok){const g=await gGet(code);return revealExisting(code,g)} // quelqu'un vient de le scanner juste avant
   }
-  status.textContent="";
-  createCard(code,p);
+  const card=await addToCollection({...base,rarity,image:null,claimedAt:now,discoverer:true});
+  card.claimedAt=now;
+  showReveal(card,{first:true});
 }
-async function createCard(code,p){
-  const card={code,...p,rarity:roll(),serial:await nextSerial(),createdAt:Date.now(),image:null};
-  try{card.id=await putCard(card)}catch(e){}
-  showReveal(card);
+async function revealExisting(code,g){
+  const card=await addToCollection({code,name:g.name,brand:g.brand||"",category:g.category||"",source:g.source||"",rarity:g.rarity,image:g.image||null});
+  showReveal(card,{first:false});
 }
-$("#unknown").addEventListener("submit",e=>{
+
+$("#unknown").addEventListener("submit",async e=>{
   e.preventDefault();
-  const name=clean($("#unknown-name").value);if(!name)return;
+  const name=clean($("#unknown-name").value);if(!name||drawing)return;
   $("#unknown").hidden=true;$("#status").textContent="";
-  createCard($("#unknown").dataset.code,{name,brand:clean($("#unknown-brand").value),category:"",source:"Saisie manuelle"});
+  drawing=true;
+  try{await discover($("#unknown").dataset.code,{name,brand:clean($("#unknown-brand").value),category:"",source:"Saisie manuelle"})}finally{drawing=false}
 });
 $("#unknown-cancel").addEventListener("click",()=>{$("#unknown").hidden=true;$("#status").textContent=""});
 
-function showReveal(card){
-  const r=RAR[card.rarity];
-  ov.dataset.lock="1";ov.hidden=false;
+function showReveal(card,{first}){
+  const r=RAR[card.rarity]||RARITIES[0];
+  ov.hidden=false;delete ov.dataset.lock;
   const flip=el("div",{class:"flip"},el("div",{class:"flip-inner"},
     el("div",{class:"face back"},el("span",{},"ScanCartes")),
-    el("div",{class:"face front"},cardEl(card,{loading:true}))));
+    el("div",{class:"face front"},cardEl(card,card.image?{}:{loading:true}))));
   const title=el("div",{class:"ov-title"},"Tirage…");
-  const msg=el("p",{class:"ov-msg"},card.source);
+  const msg=el("p",{class:"ov-msg"},"");
   const actions=el("div",{class:"ov-actions"});
   ov.replaceChildren(el("div",{class:"ov-body"},title,flip,msg,actions));
   setTimeout(()=>{
     flip.classList.add("shown");
     if(["rare","epique","legendaire"].includes(r.id))flip.classList.add("glow-"+r.id);
-    title.textContent=r.label+" !";
-    msg.textContent="Génération de l'illustration…";
-    runGeneration(card,flip,msg,actions);
+    if(first){
+      title.textContent="Première découverte ! "+r.label;
+      msg.textContent=GLOBAL?"Personne n'avait encore scanné ce produit : ta carte devient celle de tous.":"Nouvelle carte.";
+    }else{
+      title.textContent=r.label+((card.copies||1)>1?" · ×"+card.copies:"");
+      msg.textContent=GLOBAL?"Déjà découverte : c'est la même carte pour tous les joueurs.":"Déjà dans ta collection.";
+    }
+    actions.replaceChildren(
+      el("button",{class:"primary",onclick:()=>{closeOverlay();startCam()}},"Scanner un autre"),
+      el("button",{onclick:()=>{closeOverlay();showTab("col")}},"Collection"));
+    if(!card.image)runGeneration(card,flip,msg,actions);
   },700);
 }
 
 async function runGeneration(card,flip,msg,actions){
   const front=flip.querySelector(".front");
-  actions.replaceChildren();
   front.replaceChildren(cardEl(card,{loading:true}));
-  msg.className="ov-msg";msg.textContent="Génération de l'illustration…";
+  msg.className="ov-msg";
+  const old=actions.querySelector(".retry");if(old)old.remove();
   try{
-    card.image=await generateImage(card,t=>{msg.textContent=t>0?"Générateur gratuit : prochaine image dans "+t+" s…":"Génération de l'illustration…"});
+    card.image=await obtainImage(card,t=>{msg.textContent=t});
     try{await putCard(card)}catch(e){}
     front.replaceChildren(cardEl(card));
     msg.textContent="Ajoutée à ta collection.";
   }catch(e){
     front.replaceChildren(cardEl(card,{msg:"Illustration à générer"}));
     msg.className="ov-msg err";msg.textContent=e.message+" La carte est gardée dans ta collection.";
-    if(canGenerate())actions.append(el("button",{onclick:()=>runGeneration(card,flip,msg,actions)},"Réessayer"));
+    if(canGenerate())actions.prepend(el("button",{class:"retry",onclick:()=>runGeneration(card,flip,msg,actions)},"Réessayer"));
   }
-  delete ov.dataset.lock;
-  actions.append(
-    el("button",{class:"primary",onclick:()=>{closeOverlay();startCam()}},"Scanner un autre"),
-    el("button",{onclick:()=>{closeOverlay();showTab("col")}},"Collection")
-  );
 }
 
 function showDetail(card){
   ov.hidden=false;delete ov.dataset.lock;
   const holder=el("div",{style:"width:min(78vw,300px)"},cardEl(card));
-  const msg=el("p",{class:"ov-msg"},(card.category?card.category+" · ":"")+(card.source||""));
+  const info=[card.category,card.source,(card.copies||1)>1?"×"+card.copies+" exemplaires":"",card.discoverer?"Découverte par toi":""].filter(Boolean).join(" · ");
+  const msg=el("p",{class:"ov-msg"},info);
   const actions=el("div",{class:"ov-actions"});
   const render=()=>{
-    actions.replaceChildren(
-      el("button",{class:"primary",onclick:()=>exportCard(card)},"Télécharger"),
-      el("button",{onclick:regen,disabled:canGenerate()?null:"true"},card.image?"Régénérer l'image":"Générer l'image"),
-      el("button",{class:"danger",onclick:askDelete},"Supprimer"),
-      el("button",{onclick:closeOverlay},"Fermer")
-    );
+    const btns=[el("button",{class:"primary",onclick:()=>exportCard(card)},"Télécharger")];
+    // Image officielle figée en mode mondial : on ne peut que la récupérer si elle manque
+    if(!card.image)btns.push(el("button",{onclick:regen,disabled:canGenerate()||GLOBAL?null:"true"},GLOBAL?"Récupérer l'image":"Générer l'image"));
+    else if(!GLOBAL)btns.push(el("button",{onclick:regen,disabled:canGenerate()?null:"true"},"Régénérer l'image"));
+    btns.push(el("button",{class:"danger",onclick:askDelete},"Supprimer"),el("button",{onclick:closeOverlay},"Fermer"));
+    actions.replaceChildren(...btns);
   };
   async function regen(){
-    ov.dataset.lock="1";actions.replaceChildren();
+    actions.replaceChildren();
     holder.replaceChildren(cardEl(card,{loading:true}));msg.className="ov-msg";msg.textContent="Génération de l'illustration…";
-    try{card.image=await generateImage(card,t=>{msg.textContent=t>0?"Générateur gratuit : prochaine image dans "+t+" s…":"Génération de l'illustration…"});await putCard(card);msg.textContent="Nouvelle illustration enregistrée.";renderGrid()}
+    try{card.image=GLOBAL?await obtainImage(card,t=>{msg.textContent=t}):await generateImage(card,waitMsg(t=>{msg.textContent=t}));await putCard(card);msg.textContent="Illustration enregistrée.";renderGrid()}
     catch(e){msg.className="ov-msg err";msg.textContent=e.message}
     holder.replaceChildren(cardEl(card,card.image?{}:{msg:"Illustration à générer"}));
-    delete ov.dataset.lock;render();
+    render();
   }
   function askDelete(){
     actions.replaceChildren(el("div",{class:"confirm"},
-      el("span",{},"Supprimer définitivement cette carte ?"),
+      el("span",{},"Retirer cette carte de ta collection ?"+(GLOBAL?" Elle reste dans le registre mondial.":"")),
       el("div",{class:"row"},
-        el("button",{class:"danger",onclick:async()=>{await delCard(card.id);closeOverlay();renderGrid()}},"Oui, supprimer"),
+        el("button",{class:"danger",onclick:async()=>{await delCard(card.id);closeOverlay();renderGrid()}},"Oui, retirer"),
         el("button",{onclick:render},"Annuler"))));
   }
   render();
@@ -650,7 +764,7 @@ const EXAMPLES=[
   {name:"Biscuits au beurre",brand:"Marque exemple",code:"3017760000109",rarity:"commune",serial:3}
 ];
 async function renderGrid(){
-  const cards=(await allCards()).sort((a,b)=>b.createdAt-a.createdAt);
+  const cards=(await allCards()).sort((a,b)=>(b.lastAt||b.createdAt)-(a.lastAt||a.createdAt));
   const grid=$("#grid"),chips=$("#col-chips");
   chips.replaceChildren(...RARITIES.map(r=>el("span",{class:"chip r-"+r.id},el("i"),r.label+" ",el("b",{class:"mono"},cards.filter(c=>c.rarity===r.id).length))));
   if(!cards.length){
@@ -658,8 +772,11 @@ async function renderGrid(){
     grid.replaceChildren(...EXAMPLES.map(c=>cardEl(c,{example:true})));
     return;
   }
-  $("#col-count").textContent=cards.length+(cards.length>1?" cartes":" carte");
-  grid.replaceChildren(...cards.map(c=>el("button",{class:"cardbtn","aria-label":c.name+", "+RAR[c.rarity].label,onclick:()=>showDetail(c)},cardEl(c,c.image?{}:{msg:"Illustration à générer"}))));
+  const total=cards.reduce((n,c)=>n+(c.copies||1),0);
+  $("#col-count").textContent=cards.length+(cards.length>1?" cartes différentes":" carte")+(total>cards.length?" · "+total+" exemplaires":"");
+  grid.replaceChildren(...cards.map(c=>el("button",{class:"cardbtn","aria-label":c.name+", "+(RAR[c.rarity]||RARITIES[0]).label,onclick:()=>showDetail(c)},
+    cardEl(c,c.image?{}:{msg:"Illustration à générer"}),
+    (c.copies||1)>1?el("span",{class:"copies"},"×"+c.copies):null)));
 }
 
 /* ---------- Caméra ---------- */
@@ -932,7 +1049,7 @@ $("#btn-save-rates").addEventListener("click",()=>{
 renderRates();
 
 /* ---------- Version & mises à jour ---------- */
-const APP_VERSION="1.3.0";
+const APP_VERSION="1.4.0";
 function cmpVer(a,b){const x=a.split(".").map(Number),y=b.split(".").map(Number);for(let i=0;i<3;i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)-(y[i]||0)}return 0}
 async function checkUpdate(manual){
   const st=$("#update-status");
@@ -952,6 +1069,8 @@ async function checkUpdate(manual){
 function applyUpdate(v){location.replace(location.pathname+"?v="+encodeURIComponent(v||Date.now()))}
 $("#app-version").textContent="v"+APP_VERSION;
 $("#ver-badge").textContent="v"+APP_VERSION;
+$("#net-state").classList.toggle("on",GLOBAL);
+$("#net-state span").textContent=GLOBAL?"Registre mondial connecté : une seule carte par produit pour tous les joueurs.":"Registre mondial non configuré : les cartes restent sur ce téléphone.";
 let latest=null,toastT=0;
 function toast(msg){const t=$("#toast");t.textContent=msg;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>t.hidden=true,2600)}
 $("#btn-check-update").addEventListener("click",()=>checkUpdate(true));

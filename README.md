@@ -14,3 +14,14 @@ L'app tient dans `index.html`. Elle est servie par GitHub Pages (Settings → Pa
 La version affichée dans l'app (`APP_VERSION` dans `index.html`) et celle de `version.json` doivent toujours être identiques.
 À chaque mise à jour : augmenter les deux, et décrire le changement en une ligne dans `notes`.
 L'app compare sa version à `version.json` au démarrage et propose le bouton « Mettre à jour » si une version plus récente est en ligne.
+
+## Registre mondial (une carte par produit pour tous)
+
+Le premier joueur qui scanne un produit fixe sa carte (nom, rareté, image) ; tous les joueurs suivants reçoivent la même.
+Stockage : Firebase Firestore (offre gratuite Spark), via son API REST.
+
+1. Créer un projet sur console.firebase.google.com, puis une base Firestore (mode production).
+2. Coller le contenu de `firestore.rules` dans l'onglet Règles de Firestore et publier.
+3. Ajouter une app Web au projet et recopier `apiKey` et `projectId` dans `config.js`.
+
+Sans configuration, l'app fonctionne en mode local (même règle, limitée au téléphone).
