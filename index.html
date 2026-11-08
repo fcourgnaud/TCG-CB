@@ -76,7 +76,8 @@ label{display:flex;flex-direction:column;gap:6px;font-weight:500}
 @keyframes laser{0%,100%{transform:translateY(-14px)}50%{transform:translateY(14px)}}
 .manual{display:flex;gap:8px}
 .manual input{flex:1}
-.status{min-height:1.4em;color:var(--muted)}
+.status{min-height:1.4em;color:var(--muted);margin:0}
+.status:empty{min-height:0}
 .status.err{color:var(--danger)}
 
 /* Tab bar */
@@ -228,7 +229,15 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
       <p class="sub">Stockés uniquement sur ce téléphone.</p>
     </header>
     <div class="panel">
-      <h2>Génération d'image (OpenAI)</h2>
+      <h2>Génération d'image</h2>
+      <label for="set-provider">Générateur
+        <select id="set-provider">
+          <option value="pollinations">Gratuit : Pollinations (sans clé)</option>
+          <option value="openai">OpenAI (payant, meilleure qualité)</option>
+        </select>
+        <span class="hint" id="provider-hint"></span>
+      </label>
+      <div class="stack" id="openai-fields" style="gap:12px">
       <label for="set-key">Clé API OpenAI
         <input id="set-key" type="password" autocomplete="off" placeholder="sk-…">
         <span class="hint">À créer sur platform.openai.com → API keys. Chaque image est facturée sur ton compte OpenAI.</span>
@@ -241,6 +250,7 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
       <label for="set-quality">Qualité
         <select id="set-quality"><option value="low">Basse (moins chère)</option><option value="medium">Moyenne</option><option value="high">Haute</option></select>
       </label>
+      </div>
       <button class="primary" id="btn-save-set">Enregistrer</button>
       <p class="status" id="set-status" role="status"></p>
     </div>
@@ -294,7 +304,9 @@ const LS = {
 };
 function loadRates(){const saved=LS.get("sc_rates",null);if(saved)RARITIES.forEach(r=>{if(typeof saved[r.id]==="number")r.rate=saved[r.id]})}
 loadRates();
-const settings = Object.assign({key:"",model:"gpt-image-1",quality:"low"}, LS.get("sc_settings",{}));
+const settings = Object.assign({provider:"pollinations",key:"",model:"gpt-image-1",quality:"low"}, LS.get("sc_settings",{}));
+if(!LS.get("sc_settings",null)||(!settings.key&&settings.provider==="openai"))settings.provider="pollinations";
+const canGenerate=()=>settings.provider==="pollinations"||!!settings.key;
 
 let dbp=null;
 function db(){
@@ -435,7 +447,26 @@ function buildPrompt(c){
     `. The product is the hero of the image, centered and clearly recognizable. Style: ${r.style}. `+
     `Square composition, no text, no letters, no logos, no card border or frame.`;
 }
-async function generateImage(c){
+/* Pollinations, accès sans clé : une image à la fois, ~45 s entre deux images */
+const POLL_GAP=46000;
+async function generatePollinations(c,onWait){
+  const last=LS.get("sc_poll_last",0),wait=last+POLL_GAP-Date.now();
+  for(let t=wait;t>0;t-=1000){onWait&&onWait(Math.ceil(t/1000));await new Promise(r=>setTimeout(r,Math.min(1000,t)))}
+  onWait&&onWait(0);
+  LS.set("sc_poll_last",Date.now());
+  const seed=Math.floor(Math.random()*1e9);
+  const url="https://image.pollinations.ai/prompt/"+encodeURIComponent(buildPrompt(c))+"?width=768&height=768&nologo=true&seed="+seed;
+  let r;
+  try{r=await fetch(url)}catch(e){throw new Error("Impossible de joindre le générateur gratuit. Vérifie ta connexion.")}
+  if(r.status===402||r.status===429){LS.set("sc_poll_last",Date.now());throw new Error("Le générateur gratuit demande de patienter. Réessaie dans une minute.")}
+  if(!r.ok)throw new Error("Le générateur gratuit a répondu une erreur ("+r.status+").");
+  const blob=await r.blob();
+  if(!blob.type.startsWith("image/"))throw new Error("Le générateur gratuit n'a pas renvoyé d'image.");
+  const u=URL.createObjectURL(blob);
+  try{return await compress(u)}finally{setTimeout(()=>URL.revokeObjectURL(u),2000)}
+}
+async function generateImage(c,onWait){
+  if(settings.provider==="pollinations")return generatePollinations(c,onWait);
   if(!settings.key) throw new Error("Ajoute ta clé OpenAI dans Réglages pour générer l'illustration.");
   const model=(settings.model||"gpt-image-1").trim();
   const body={model,prompt:buildPrompt(c),n:1,size:"1024x1024"};
@@ -564,14 +595,14 @@ async function runGeneration(card,flip,msg,actions){
   front.replaceChildren(cardEl(card,{loading:true}));
   msg.className="ov-msg";msg.textContent="Génération de l'illustration…";
   try{
-    card.image=await generateImage(card);
+    card.image=await generateImage(card,t=>{msg.textContent=t>0?"Générateur gratuit : prochaine image dans "+t+" s…":"Génération de l'illustration…"});
     try{await putCard(card)}catch(e){}
     front.replaceChildren(cardEl(card));
     msg.textContent="Ajoutée à ta collection.";
   }catch(e){
     front.replaceChildren(cardEl(card,{msg:"Illustration à générer"}));
     msg.className="ov-msg err";msg.textContent=e.message+" La carte est gardée dans ta collection.";
-    if(settings.key)actions.append(el("button",{onclick:()=>runGeneration(card,flip,msg,actions)},"Réessayer"));
+    if(canGenerate())actions.append(el("button",{onclick:()=>runGeneration(card,flip,msg,actions)},"Réessayer"));
   }
   delete ov.dataset.lock;
   actions.append(
@@ -588,7 +619,7 @@ function showDetail(card){
   const render=()=>{
     actions.replaceChildren(
       el("button",{class:"primary",onclick:()=>exportCard(card)},"Télécharger"),
-      el("button",{onclick:regen,disabled:settings.key?null:"true"},card.image?"Régénérer l'image":"Générer l'image"),
+      el("button",{onclick:regen,disabled:canGenerate()?null:"true"},card.image?"Régénérer l'image":"Générer l'image"),
       el("button",{class:"danger",onclick:askDelete},"Supprimer"),
       el("button",{onclick:closeOverlay},"Fermer")
     );
@@ -596,7 +627,7 @@ function showDetail(card){
   async function regen(){
     ov.dataset.lock="1";actions.replaceChildren();
     holder.replaceChildren(cardEl(card,{loading:true}));msg.className="ov-msg";msg.textContent="Génération de l'illustration…";
-    try{card.image=await generateImage(card);await putCard(card);msg.textContent="Nouvelle illustration enregistrée.";renderGrid()}
+    try{card.image=await generateImage(card,t=>{msg.textContent=t>0?"Générateur gratuit : prochaine image dans "+t+" s…":"Génération de l'illustration…"});await putCard(card);msg.textContent="Nouvelle illustration enregistrée.";renderGrid()}
     catch(e){msg.className="ov-msg err";msg.textContent=e.message}
     holder.replaceChildren(cardEl(card,card.image?{}:{msg:"Illustration à générer"}));
     delete ov.dataset.lock;render();
@@ -869,7 +900,7 @@ $("#photo-input").addEventListener("change",async e=>{
 function showTab(t){
   for(const b of document.querySelectorAll("nav.tabs button"))b.setAttribute("aria-selected",b.dataset.tab===t);
   for(const s of["scan","col","set"])$("#tab-"+s).hidden=s!==t;
-  if(t!=="scan"&&scanning)stopCam();
+  if(t!=="scan"&&cam.running)stopCam();
   if(t==="col")renderGrid();
   window.scrollTo(0,0);
 }
@@ -883,9 +914,15 @@ function renderRates(){
     el("input",{id:"rate-"+r.id,type:"number",min:"0",step:"0.1",value:r.rate,class:"mono","aria-label":"Taux "+r.label})
   ]));
 }
-$("#set-key").value=settings.key;$("#set-model").value=settings.model;$("#set-quality").value=settings.quality;
+$("#set-provider").value=settings.provider;$("#set-key").value=settings.key;$("#set-model").value=settings.model;$("#set-quality").value=settings.quality;
+function syncProvider(){
+  const free=$("#set-provider").value==="pollinations";
+  $("#openai-fields").hidden=free;
+  $("#provider-hint").textContent=free?"Gratuit et sans compte. Une image toutes les 45 secondes environ, en 768 × 768. Qualité plus variable qu'OpenAI.":"Nécessite une clé API et des crédits OpenAI.";
+}
+$("#set-provider").addEventListener("change",syncProvider);syncProvider();
 $("#btn-save-set").addEventListener("click",()=>{
-  settings.key=$("#set-key").value.trim();settings.model=$("#set-model").value.trim()||"gpt-image-1";settings.quality=$("#set-quality").value;
+  settings.provider=$("#set-provider").value;settings.key=$("#set-key").value.trim();settings.model=$("#set-model").value.trim()||"gpt-image-1";settings.quality=$("#set-quality").value;
   LS.set("sc_settings",settings);$("#set-status").textContent="Réglages enregistrés.";
 });
 $("#btn-save-rates").addEventListener("click",()=>{
@@ -895,7 +932,7 @@ $("#btn-save-rates").addEventListener("click",()=>{
 renderRates();
 
 /* ---------- Version & mises à jour ---------- */
-const APP_VERSION="1.2.1";
+const APP_VERSION="1.3.0";
 function cmpVer(a,b){const x=a.split(".").map(Number),y=b.split(".").map(Number);for(let i=0;i<3;i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)-(y[i]||0)}return 0}
 async function checkUpdate(manual){
   const st=$("#update-status");
