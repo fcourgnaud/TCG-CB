@@ -66,6 +66,10 @@ label{display:flex;flex-direction:column;gap:6px;font-weight:500}
 @keyframes ring{from{transform:scale(1.6);opacity:1}to{transform:scale(1);opacity:0}}
 .reticle.hit{border-color:#5be38a;box-shadow:0 0 0 999px rgba(0,0,0,.35),0 0 24px #5be38a}
 .engine{position:absolute;top:8px;right:10px;font:500 .7rem var(--f-mono);color:var(--muted);background:rgba(0,0,0,.45);padding:2px 6px;border-radius:6px}
+.photo-zone{position:relative;aspect-ratio:4/3;max-width:100%;border-radius:18px;overflow:hidden;background:#081218;border:1px solid var(--line)}
+.photo-zone img{width:100%;height:100%;object-fit:contain;display:block}
+.photo-zone .idle{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--muted);text-align:center;padding:16px}
+button.chip{cursor:pointer;color:var(--fg);font-weight:500}
 .alt-row{display:flex;gap:8px;flex-wrap:wrap}
 .alt-row>*{flex:1 1 160px}
 .update-bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:30;display:flex;align-items:center;gap:10px;justify-content:space-between;background:var(--accent);color:#2a1d00;border-radius:12px;padding:10px 12px;font-weight:600;margin-bottom:16px}
@@ -82,7 +86,7 @@ label{display:flex;flex-direction:column;gap:6px;font-weight:500}
 
 /* Tab bar */
 nav.tabs{position:fixed;left:0;right:0;bottom:0;padding:8px 12px calc(8px + env(safe-area-inset-bottom,0px));background:rgba(15,29,36,.94);backdrop-filter:blur(8px);border-top:1px solid var(--line);display:flex;justify-content:center;gap:6px;z-index:20}
-nav.tabs button{flex:1;max-width:180px;background:transparent;border:0;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:2px;padding:.4rem;font-size:.8rem}
+nav.tabs button{flex:1;max-width:140px;background:transparent;border:0;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:2px;padding:.4rem;font-size:.8rem}
 nav.tabs button svg{width:24px;height:24px}
 nav.tabs button[aria-selected="true"]{color:var(--accent)}
 
@@ -219,6 +223,42 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
     </div>
   </section>
 
+  <!-- PHOTO -->
+  <section id="tab-photo" class="stack" hidden>
+    <header>
+      <h1>Photo</h1>
+      <p class="sub">Photographie un produit : l'app lit son nom et crée sa carte, même sans code-barres.</p>
+    </header>
+    <div class="photo-zone">
+      <img id="photo-preview" alt="Photo du produit" hidden>
+      <div class="idle" id="photo-empty">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>
+        <span>Cadre bien le nom du produit, de face et bien éclairé.</span>
+      </div>
+    </div>
+    <div class="alt-row">
+      <button class="primary" type="button" id="btn-photo-take">Prendre une photo</button>
+      <button type="button" id="btn-photo-pick">Choisir une image</button>
+    </div>
+    <input id="photo-take" type="file" accept="image/*" capture="environment" hidden>
+    <input id="photo-pick" type="file" accept="image/*" hidden>
+    <p class="status" id="photo-status" role="status"></p>
+    <form class="panel" id="photo-form" hidden>
+      <h2>Produit identifié</h2>
+      <div id="photo-chips-wrap" class="stack" style="gap:6px">
+        <span class="hint">Textes repérés : touche-les pour les ajouter au nom.</span>
+        <div class="chips" id="photo-chips"></div>
+      </div>
+      <label for="photo-name">Nom du produit<input id="photo-name" required autocomplete="off"></label>
+      <label for="photo-brand">Marque (facultatif)<input id="photo-brand" autocomplete="off"></label>
+      <label for="photo-type">Type de produit
+        <select id="photo-type"><option value="alimentation">Alimentation</option><option value="beaute">Beauté</option><option value="animaux">Animaux</option><option value="livre">Livre</option><option value="album">Album</option><option value="autre">Autre</option></select>
+        <span class="hint">Il oriente la scène de l'illustration (onglet Contextes du sheet).</span>
+      </label>
+      <button class="primary" type="submit">Créer la carte</button>
+    </form>
+  </section>
+
   <!-- COLLECTION -->
   <section id="tab-col" class="stack" hidden>
     <header>
@@ -295,6 +335,7 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
 
 <nav class="tabs" role="tablist">
   <button role="tab" data-tab="scan" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M11 8v8M15 8v8"/></svg>Scanner</button>
+  <button role="tab" data-tab="photo" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>Photo</button>
   <button role="tab" data-tab="col" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="5" width="11" height="15" rx="2"/><path d="M17 5.5l2.6.7a2 2 0 0 1 1.4 2.4l-2.9 10.8"/></svg>Collection</button>
   <button role="tab" data-tab="set" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Réglages</button>
 </nav>
@@ -383,7 +424,7 @@ function cardEl(c,{example=false,loading=false,msg=""}={}){
       el("div",{class:"c-top"},el("span",{class:"c-name"},c.name),el("span",{class:"c-gems","aria-label":r.gems+" sur 5"},Array.from({length:r.gems},()=>el("i")))),
       art,
       el("div",{class:"c-bot"},el("span",{class:"c-brand"},c.brand||"Sans marque"),el("span",{class:"c-rar"},r.label)),
-      el("div",{class:"c-code"},el("span",{},c.code),el("span",{},"N° "+String(c.serial||0).padStart(3,"0")))
+      el("div",{class:"c-code"},el("span",{},c.source==="Photo"?"Photo":c.code),el("span",{},"N° "+String(c.serial||0).padStart(3,"0")))
     )
   );
 }
@@ -487,6 +528,7 @@ const DEFAULT_CTX={
 };
 const normKey=s=>(s||"").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").trim();
 function contextType(c){
+  const k=normKey(c.category);if(c.source==="Photo"&&DEFAULT_CTX[k])return k;
   const t=((c.category||"")+" "+(c.source||"")).toLowerCase();
   if(c.source==="Google Books"||c.source==="Open Library"||/livre|book|roman|fiction/.test(t))return "livre";
   if(c.source==="MusicBrainz"||/album|cd|vinyl/.test(t))return "album";
@@ -629,7 +671,7 @@ async function exportCard(c){
   ctx.fillStyle=r.ink;ctx.font="600 26px Outfit, sans-serif";ctx.fillText((c.brand||"Sans marque").slice(0,26),44,742);
   ctx.font="700 22px Rowdies, sans-serif";ctx.textAlign="right";ctx.fillText(r.label.toUpperCase(),W-44,746);
   ctx.font="500 20px 'JetBrains Mono', monospace";ctx.globalAlpha=.8;ctx.fillText("N° "+String(c.serial||0).padStart(3,"0"),W-44,800);
-  ctx.textAlign="left";ctx.fillText(c.code,44,800);
+  ctx.textAlign="left";ctx.fillText(c.source==="Photo"?"Photo":c.code,44,800);
   return new Promise(res=>cv.toBlob(b=>{
     const a=document.createElement("a");a.href=URL.createObjectURL(b);
     a.download=`carte-${c.code}-${r.id}.png`;document.body.append(a);a.click();a.remove();
@@ -1158,7 +1200,7 @@ $("#photo-input").addEventListener("change",async e=>{
 /* ---------- Onglets ---------- */
 function showTab(t){
   for(const b of document.querySelectorAll("nav.tabs button"))b.setAttribute("aria-selected",b.dataset.tab===t);
-  for(const s of["scan","col","set"])$("#tab-"+s).hidden=s!==t;
+  for(const s of["scan","photo","col","set"])$("#tab-"+s).hidden=s!==t;
   if(t!=="scan"&&cam.running)stopCam();
   if(t==="col")renderGrid();
   window.scrollTo(0,0);
@@ -1209,7 +1251,7 @@ $("#btn-reset-rates").addEventListener("click",()=>saveRates({...DEFAULT_RATES})
 renderRates();
 
 /* ---------- Version & mises à jour ---------- */
-const APP_VERSION="1.9.1";
+const APP_VERSION="1.10.0";
 function cmpVer(a,b){const x=a.split(".").map(Number),y=b.split(".").map(Number);for(let i=0;i<3;i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)-(y[i]||0)}return 0}
 async function checkUpdate(manual){
   const st=$("#update-status");
@@ -1333,6 +1375,141 @@ $("#btn-admin-go").addEventListener("click",async()=>{
 });
 syncEpoch();
 document.addEventListener("visibilitychange",()=>{if(!document.hidden)syncEpoch()});
+
+/* ---------- Onglet Photo : identifier un produit sans scanner son code-barres ----------
+   1. code-barres visible sur la photo → tirage classique
+   2. sinon : nom lu sur l'emballage (OpenAI Vision si une clé est réglée, sinon OCR Tesseract.js
+      dans le téléphone), corrigeable, puis tirage et illustration comme pour un scan.
+   Un produit identifié par photo reçoit un code dérivé de son nom (« 99 » + 12 chiffres) :
+   deux joueurs qui photographient le même produit partagent donc les mêmes illustrations. */
+const PHOTO_TYPES=[["alimentation","Alimentation"],["beaute","Beauté"],["animaux","Animaux"],["livre","Livre"],["album","Album"],["autre","Autre"]];
+const TESS_URL="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+let photoBusy=false;
+
+async function decodeImageBarcode(img){
+  let code=null;
+  const nat=await getNative();
+  if(nat){try{const r=await nat.detect(img);if(r.length)code=r[0].rawValue}catch(err){}}
+  if(!code&&window.ZXing){
+    for(const max of [1600,2400,1000]){
+      const k=Math.min(1,max/Math.max(img.width,img.height)),cv=document.createElement("canvas");
+      cv.width=Math.round(img.width*k);cv.height=Math.round(img.height*k);cv.getContext("2d").drawImage(img,0,0,cv.width,cv.height);
+      code=zxDecodeCanvas(cv)||zxDecodeCanvas(rotated(cv));
+      if(code)break;
+    }
+  }
+  if(!code)return null;
+  code=normalize(code);
+  return (code.length===8||gtinOk(code))?code:null;
+}
+function imgToCanvas(img,max){
+  const k=Math.min(1,max/Math.max(img.width,img.height)),cv=document.createElement("canvas");
+  cv.width=Math.round(img.width*k);cv.height=Math.round(img.height*k);cv.getContext("2d").drawImage(img,0,0,cv.width,cv.height);
+  return cv;
+}
+function loadScriptOnce(src){
+  return new Promise((res,rej)=>{
+    if(document.querySelector(`script[src="${src}"]`)&&window.Tesseract)return res();
+    const s=document.createElement("script");s.src=src;s.onload=()=>res();s.onerror=()=>rej(new Error("chargement impossible"));document.head.append(s);
+  });
+}
+
+/* Lecture du texte de l'emballage dans le téléphone (gratuit, sans clé) */
+async function ocrIdentify(img,onMsg){
+  onMsg("Chargement du lecteur de texte (la première fois peut prendre un moment)…");
+  await loadScriptOnce(TESS_URL);
+  if(!window.Tesseract)throw new Error("Le lecteur de texte n'a pas pu se charger.");
+  const cv=imgToCanvas(img,1600);
+  const r=await Tesseract.recognize(cv,"fra+eng",{logger:m=>{if(m.status==="recognizing text")onMsg("Lecture du texte… "+Math.round((m.progress||0)*100)+" %")}});
+  const lines=((r.data&&r.data.lines)||[]).map(l=>({
+    text:clean((l.text||"").replace(/[^\p{L}\p{N}&'’ \-]/gu," ")),
+    h:(l.bbox?l.bbox.y1-l.bbox.y0:0),conf:l.confidence||0
+  })).filter(l=>l.conf>=45&&(l.text.match(/\p{L}/gu)||[]).length>=2);
+  // Les plus gros textes de l'emballage sont presque toujours le nom et la marque
+  lines.sort((a,b)=>b.h-a.h);
+  const seen=new Set(),chips=[];
+  for(const l of lines){const k=normKey(l.text);if(!seen.has(k)){seen.add(k);chips.push(l)}}
+  const top=chips.slice(0,8);
+  let name=top[0]?top[0].text:"";
+  if(top[1]&&top[1].h>=top[0].h*0.7)name+=" "+top[1].text;
+  return {name:clean(name),brand:"",type:"autre",chips:top.map(c=>c.text),engine:"Lecture du texte"};
+}
+
+/* Identification par l'IA d'OpenAI (si une clé est réglée) : plus fiable, reconnaît aussi le type */
+async function visionIdentify(img){
+  const url=imgToCanvas(img,1024).toDataURL("image/jpeg",.85);
+  const r=await fetch("https://api.openai.com/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+settings.key},
+    body:JSON.stringify({model:"gpt-4o-mini",response_format:{type:"json_object"},max_tokens:200,messages:[{role:"user",content:[
+      {type:"text",text:'Identify the product in this photo. Reply only with JSON: {"name": product name as printed on it, without weight, volume or pack size, "brand": brand or "", "type": one of "alimentation","beaute","animaux","livre","album","autre", "texts": up to 6 other notable texts printed on it}.'},
+      {type:"image_url",image_url:{url}}]}]})});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(r.status===401?"Clé OpenAI refusée.":"OpenAI : "+((j.error&&j.error.message)||r.status));
+  const o=JSON.parse(j.choices[0].message.content||"{}");
+  const type=PHOTO_TYPES.some(t=>t[0]===o.type)?o.type:"autre";
+  return {name:clean(o.name||""),brand:clean(o.brand||""),type,chips:(o.texts||[]).map(clean).filter(Boolean).slice(0,8),engine:"OpenAI"};
+}
+
+/* Code stable dérivé du nom : même produit photographié = même carte pour tous */
+async function nameCode(name){
+  const h=await sha256(normKey(name).replace(/[^a-z0-9]+/g," ").trim());
+  return "99"+(BigInt("0x"+h.slice(0,24))%10n**12n).toString().padStart(12,"0");
+}
+
+async function analysePhoto(file){
+  if(photoBusy)return;photoBusy=true;
+  const st=$("#photo-status"),form=$("#photo-form");
+  form.hidden=true;st.className="status";
+  try{
+    const url=URL.createObjectURL(file);
+    $("#photo-preview").src=url;$("#photo-preview").hidden=false;$("#photo-empty").hidden=true;
+    const img=await loadImg(url);
+    if(!img)throw new Error("Impossible d'ouvrir cette photo.");
+    st.textContent="Recherche d'un code-barres…";
+    const code=await decodeImageBarcode(img);
+    if(code){st.textContent="Code-barres "+code+" trouvé sur la photo.";photoBusy=false;return draw(code)}
+    const useAI=settings.provider==="openai"&&!!settings.key;
+    st.textContent=useAI?"Identification du produit…":"Lecture du nom sur l'emballage…";
+    let res;
+    try{res=useAI?await visionIdentify(img):await ocrIdentify(img,m=>{st.textContent=m})}
+    catch(e){if(!useAI)throw e;res=await ocrIdentify(img,m=>{st.textContent=m})}
+    $("#photo-name").value=res.name;$("#photo-brand").value=res.brand;$("#photo-type").value=res.type;
+    $("#photo-chips").replaceChildren(...res.chips.map(t=>el("button",{type:"button",class:"chip",onclick:()=>{const n=$("#photo-name");n.value=clean((n.value+" "+t));n.focus()}},t)));
+    $("#photo-chips-wrap").hidden=!res.chips.length;
+    form.hidden=false;
+    st.textContent=res.name?"Vérifie le nom proposé ("+res.engine+"), puis crée la carte.":"Aucun nom lisible : tape le nom du produit.";
+    if(!res.name)$("#photo-name").focus();
+  }catch(e){st.className="status err";st.textContent=e.message+" Tu peux aussi taper le nom ci-dessous.";form.hidden=false;$("#photo-chips-wrap").hidden=true}
+  finally{photoBusy=false}
+}
+
+async function drawFromPhoto(name,brand,type){
+  if(drawing)return;
+  const st=$("#photo-status");
+  const code=await nameCode(name),label=(PHOTO_TYPES.find(t=>t[0]===type)||PHOTO_TYPES[5])[1];
+  const p={name,brand,category:label,source:"Photo"};
+  drawing=true;
+  try{
+    st.className="status";
+    let prod=null;
+    if(GLOBAL){
+      st.textContent="Recherche dans le registre mondial…";
+      try{prod=await gGet("products/"+code)}catch(e){st.className="status err";st.textContent=e.message;return}
+    }else prod=(await allCards()).find(c=>c.code===code)||null;
+    st.textContent="";
+    if(prod)await finish(code,prod,false);else await registerProduct(code,p);
+  }finally{drawing=false}
+}
+
+$("#btn-photo-take").addEventListener("click",()=>$("#photo-take").click());
+$("#btn-photo-pick").addEventListener("click",()=>$("#photo-pick").click());
+for(const id of ["#photo-take","#photo-pick"])$(id).addEventListener("change",e=>{const f=e.target.files&&e.target.files[0];e.target.value="";if(f)analysePhoto(f)});
+$("#photo-form").addEventListener("submit",e=>{
+  e.preventDefault();
+  const name=clean($("#photo-name").value);
+  if(!name){const st=$("#photo-status");st.className="status err";st.textContent="Donne un nom au produit.";return}
+  drawFromPhoto(name,clean($("#photo-brand").value),$("#photo-type").value);
+});
+
 
 
 </script>
