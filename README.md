@@ -17,7 +17,7 @@ L'app compare sa version à `version.json` au démarrage et propose le bouton «
 
 ## Registre mondial (une carte par produit pour tous)
 
-Le premier joueur qui scanne un produit fixe sa carte (nom, rareté, image) ; tous les joueurs suivants reçoivent la même.
+Chaque joueur a sa propre app et sa propre collection ; la base est commune. Le premier joueur qui scanne un produit génère son illustration, que tous les joueurs suivants reçoivent. La rareté est tirée à chaque scan, pour chaque joueur.
 Stockage : Firebase Firestore (offre gratuite Spark), via son API REST.
 
 1. Créer un projet sur console.firebase.google.com, puis une base Firestore (mode production).

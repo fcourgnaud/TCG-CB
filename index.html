@@ -446,11 +446,12 @@ async function lookup(code,onProgress){
 }
 
 /* ---------- Génération d'image ---------- */
+const SHARED_STYLE="vibrant collectible trading card illustration, rich colors, soft dramatic lighting, clean painterly details, simple atmospheric background";
 function buildPrompt(c){
-  const r=RAR[c.rarity];
+  const r=RAR[c.rarity]||RARITIES[0];
   return `Collectible trading card artwork featuring the product "${c.name}"`+
     (c.brand?` by ${c.brand}`:"")+(c.category?` (${c.category})`:"")+
-    `. The product is the hero of the image, centered and clearly recognizable. Style: ${r.style}. `+
+    `. The product is the hero of the image, centered and clearly recognizable. Style: ${GLOBAL?SHARED_STYLE:r.style}. `+
     `Square composition, no text, no letters, no logos, no card border or frame.`;
 }
 /* Pollinations, accès sans clé : une image à la fois, ~45 s entre deux images */
@@ -578,10 +579,10 @@ async function gPatch(code,data,updateTime){
 
 /* ---------- Collection locale : une entrée par produit, avec le nombre d'exemplaires ---------- */
 async function addToCollection(c){
-  const all=await allCards(),ex=all.find(x=>x.code===c.code);
+  const all=await allCards(),ex=all.find(x=>x.code===c.code&&x.rarity===c.rarity);
   if(ex){
     ex.copies=(ex.copies||1)+1;ex.lastAt=Date.now();
-    if(GLOBAL)Object.assign(ex,{name:c.name,brand:c.brand,category:c.category,rarity:c.rarity,image:c.image||ex.image});
+    if(c.image)ex.image=c.image;
     try{await putCard(ex)}catch(e){}
     return ex;
   }
@@ -590,6 +591,9 @@ async function addToCollection(c){
   return card;
 }
 
+async function shareImageLocally(code,image){
+  for(const c of await allCards()){if(c.code===code&&c.image!==image){c.image=image;try{await putCard(c)}catch(e){}}}
+}
 /* Obtenir l'image officielle d'une carte : la lire, la générer si c'est notre tour, ou attendre */
 function waitMsg(onMsg){return t=>onMsg(t>0?"Générateur gratuit : prochaine image dans "+t+" s…":"Génération de l'illustration…")}
 async function obtainImage(card,onMsg){
@@ -667,7 +671,9 @@ async function discover(code,p){
   showReveal(card,{first:true});
 }
 async function revealExisting(code,g){
-  const card=await addToCollection({code,name:g.name,brand:g.brand||"",category:g.category||"",source:g.source||"",rarity:g.rarity,image:g.image||null});
+  const known=(await allCards()).find(c=>c.code===code&&c.image);
+  const image=GLOBAL?(g.image||null):(g.image||(known&&known.image)||null);
+  const card=await addToCollection({code,name:g.name,brand:g.brand||"",category:g.category||"",source:g.source||"",rarity:roll(),image});
   showReveal(card,{first:false});
 }
 
@@ -695,10 +701,10 @@ function showReveal(card,{first}){
     if(["rare","epique","legendaire"].includes(r.id))flip.classList.add("glow-"+r.id);
     if(first){
       title.textContent="Première découverte ! "+r.label;
-      msg.textContent=GLOBAL?"Personne n'avait encore scanné ce produit : ta carte devient celle de tous.":"Nouvelle carte.";
+      msg.textContent=GLOBAL?"Personne n'avait encore scanné ce produit : ton illustration devient celle de tous les joueurs.":"Nouvelle carte.";
     }else{
       title.textContent=r.label+((card.copies||1)>1?" · ×"+card.copies:"");
-      msg.textContent=GLOBAL?"Déjà découverte : c'est la même carte pour tous les joueurs.":"Déjà dans ta collection.";
+      msg.textContent=GLOBAL?"Illustration créée par le premier joueur à l'avoir scanné. La rareté, elle, est tirée pour toi.":"Nouveau tirage pour un produit déjà scanné.";
     }
     actions.replaceChildren(
       el("button",{class:"primary",onclick:()=>{closeOverlay();startCam()}},"Scanner un autre"),
@@ -715,6 +721,7 @@ async function runGeneration(card,flip,msg,actions){
   try{
     card.image=await obtainImage(card,t=>{msg.textContent=t});
     try{await putCard(card)}catch(e){}
+    await shareImageLocally(card.code,card.image);
     front.replaceChildren(cardEl(card));
     msg.textContent="Ajoutée à ta collection.";
   }catch(e){
@@ -741,7 +748,7 @@ function showDetail(card){
   async function regen(){
     actions.replaceChildren();
     holder.replaceChildren(cardEl(card,{loading:true}));msg.className="ov-msg";msg.textContent="Génération de l'illustration…";
-    try{card.image=GLOBAL?await obtainImage(card,t=>{msg.textContent=t}):await generateImage(card,waitMsg(t=>{msg.textContent=t}));await putCard(card);msg.textContent="Illustration enregistrée.";renderGrid()}
+    try{card.image=GLOBAL?await obtainImage(card,t=>{msg.textContent=t}):await generateImage(card,waitMsg(t=>{msg.textContent=t}));await putCard(card);await shareImageLocally(card.code,card.image);msg.textContent="Illustration enregistrée.";renderGrid()}
     catch(e){msg.className="ov-msg err";msg.textContent=e.message}
     holder.replaceChildren(cardEl(card,card.image?{}:{msg:"Illustration à générer"}));
     render();
@@ -1049,7 +1056,7 @@ $("#btn-save-rates").addEventListener("click",()=>{
 renderRates();
 
 /* ---------- Version & mises à jour ---------- */
-const APP_VERSION="1.4.1";
+const APP_VERSION="1.5.0";
 function cmpVer(a,b){const x=a.split(".").map(Number),y=b.split(".").map(Number);for(let i=0;i<3;i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)-(y[i]||0)}return 0}
 async function checkUpdate(manual){
   const st=$("#update-status");
@@ -1070,7 +1077,7 @@ function applyUpdate(v){location.replace(location.pathname+"?v="+encodeURICompon
 $("#app-version").textContent="v"+APP_VERSION;
 $("#ver-badge").textContent="v"+APP_VERSION;
 $("#net-state").classList.toggle("on",GLOBAL);
-$("#net-state span").textContent=GLOBAL?"Registre mondial connecté : une seule carte par produit pour tous les joueurs.":"Registre mondial non configuré : les cartes restent sur ce téléphone.";
+$("#net-state span").textContent=GLOBAL?"Registre mondial connecté : une seule illustration par produit pour tous les joueurs.":"Registre mondial non configuré : les cartes restent sur ce téléphone.";
 let latest=null,toastT=0;
 function toast(msg){const t=$("#toast");t.textContent=msg;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>t.hidden=true,2600)}
 $("#btn-check-update").addEventListener("click",()=>checkUpdate(true));
