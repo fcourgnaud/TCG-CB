@@ -147,7 +147,7 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
 .glow-rare{filter:drop-shadow(0 0 14px #4aa3ff)}
 .confirm{display:flex;flex-direction:column;gap:8px;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
 
-.rates{display:grid;grid-template-columns:1fr 90px;gap:8px 12px;align-items:center}
+.rates{display:grid;grid-template-columns:1fr 80px 64px;gap:8px 12px;align-items:center}
 .rates span{display:flex;align-items:center;gap:8px}
 .rates span i{width:10px;height:10px;transform:rotate(45deg);background:var(--f2);display:block}
 .empty{color:var(--muted);text-align:center;padding:8px 0}
@@ -270,8 +270,9 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
     <div class="panel">
       <h2>Taux de drop (%)</h2>
       <div class="rates" id="rates"></div>
-      <span class="hint">Les taux sont ramenés à 100 % automatiquement.</span>
-      <button id="btn-save-rates">Enregistrer les taux</button>
+      <span class="hint">Les taux sont ramenés à 100 % automatiquement. La virgule est acceptée.</span>
+      <div class="row"><button class="primary" id="btn-save-rates">Enregistrer les taux</button><button id="btn-reset-rates">Valeurs par défaut</button></div>
+      <p class="status" id="rates-status" role="status"></p>
     </div>
   </section>
 </main>
@@ -302,6 +303,7 @@ const RARITIES = [
    style:"legendary mythic masterpiece, radiant golden light rays, divine celestial atmosphere, floating particles, ultra detailed"}
 ];
 const RAR = Object.fromEntries(RARITIES.map(r=>[r.id,r]));
+const DEFAULT_RATES=Object.fromEntries(RARITIES.map(r=>[r.id,r.rate]));
 
 /* ---------- Stockage ---------- */
 const LS = {
@@ -1062,12 +1064,29 @@ function showTab(t){
 document.querySelectorAll("nav.tabs button").forEach(b=>b.addEventListener("click",()=>showTab(b.dataset.tab)));
 
 /* ---------- Réglages ---------- */
+const parseRate=v=>{const n=parseFloat(String(v).replace(",",".").replace(/[^0-9.]/g,""));return isNaN(n)?0:Math.max(0,n)};
+function fmtPct(n){return (Math.round(n*10)/10).toLocaleString("fr-FR")+" %"}
 function renderRates(){
-  $("#rate-chips").replaceChildren(...RARITIES.map(r=>el("span",{class:"chip r-"+r.id},el("i"),r.label+" ",el("b",{class:"mono"},pct(r)+" %"))));
+  $("#rate-chips").replaceChildren(...RARITIES.map(r=>el("span",{class:"chip r-"+r.id},el("i"),r.label+" ",el("b",{class:"mono"},fmtPct(pct(r))))));
   $("#rates").replaceChildren(...RARITIES.flatMap(r=>[
     el("span",{class:"r-"+r.id},el("i"),r.label),
-    el("input",{id:"rate-"+r.id,type:"number",min:"0",step:"0.1",value:r.rate,class:"mono","aria-label":"Taux "+r.label})
+    el("input",{id:"rate-"+r.id,type:"text",inputmode:"decimal",autocomplete:"off",value:String(r.rate).replace(".",","),class:"mono","aria-label":"Taux "+r.label,oninput:previewRates}),
+    el("span",{class:"mono hint",id:"rate-pct-"+r.id},fmtPct(pct(r)))
   ]));
+}
+/* Aperçu en direct du pourcentage réel pendant la saisie */
+function previewRates(){
+  const vals=RARITIES.map(r=>parseRate($("#rate-"+r.id).value)),t=vals.reduce((a,b)=>a+b,0);
+  RARITIES.forEach((r,i)=>{$("#rate-pct-"+r.id).textContent=t?fmtPct(vals[i]/t*100):"–"});
+  const st=$("#rates-status");st.className="status";st.textContent=t?"Modifications non enregistrées.":"";
+}
+function saveRates(vals){
+  const t=Object.values(vals).reduce((a,b)=>a+b,0),st=$("#rates-status");
+  if(!t){st.className="status err";st.textContent="Au moins une rareté doit avoir un taux supérieur à 0.";return}
+  RARITIES.forEach(r=>{r.rate=vals[r.id]});
+  LS.set("sc_rates",vals);renderRates();
+  st.className="status";
+  st.textContent="✓ Taux enregistrés : "+RARITIES.map(r=>r.label+" "+fmtPct(pct(r))).join(" · ")+". Ils s'appliquent dès le prochain scan.";
 }
 $("#set-provider").value=settings.provider;$("#set-key").value=settings.key;$("#set-model").value=settings.model;$("#set-quality").value=settings.quality;
 function syncProvider(){
@@ -1078,16 +1097,17 @@ function syncProvider(){
 $("#set-provider").addEventListener("change",syncProvider);syncProvider();
 $("#btn-save-set").addEventListener("click",()=>{
   settings.provider=$("#set-provider").value;settings.key=$("#set-key").value.trim();settings.model=$("#set-model").value.trim()||"gpt-image-1";settings.quality=$("#set-quality").value;
-  LS.set("sc_settings",settings);$("#set-status").textContent="Réglages enregistrés.";
+  LS.set("sc_settings",settings);$("#set-status").textContent="✓ Réglages enregistrés.";
 });
 $("#btn-save-rates").addEventListener("click",()=>{
-  const o={};RARITIES.forEach(r=>{const v=parseFloat($("#rate-"+r.id).value);r.rate=isNaN(v)?0:Math.max(0,v);o[r.id]=r.rate});
-  LS.set("sc_rates",o);renderRates();$("#set-status").textContent="";
+  const vals={};RARITIES.forEach(r=>{vals[r.id]=parseRate($("#rate-"+r.id).value)});
+  saveRates(vals);
 });
+$("#btn-reset-rates").addEventListener("click",()=>saveRates({...DEFAULT_RATES}));
 renderRates();
 
 /* ---------- Version & mises à jour ---------- */
-const APP_VERSION="1.6.0";
+const APP_VERSION="1.6.1";
 function cmpVer(a,b){const x=a.split(".").map(Number),y=b.split(".").map(Number);for(let i=0;i<3;i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)-(y[i]||0)}return 0}
 async function checkUpdate(manual){
   const st=$("#update-status");

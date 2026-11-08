@@ -1,4 +1,4 @@
 {
-  "version": "1.6.0",
-  "notes": "une illustration par produit et par rareté, partagée entre joueurs"
+  "version": "1.6.1",
+  "notes": "taux de drop : message de confirmation, virgule acceptée, aperçu en direct"
 }
