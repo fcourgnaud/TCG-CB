@@ -1,4 +1,4 @@
 {
-  "version": "1.7.0",
-  "notes": "nouveau prompt : le nom du produit devient le sujet de l'illustration"
+  "version": "1.8.0",
+  "notes": "prompts lus dans le Google Sheet"
 }

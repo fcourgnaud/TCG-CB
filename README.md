@@ -25,3 +25,10 @@ Stockage : Firebase Firestore (offre gratuite Spark), via son API REST.
 3. Ajouter une app Web au projet et recopier `apiKey` et `projectId` dans `config.js`.
 
 Sans configuration, l'app fonctionne en mode local (même règle, limitée au téléphone).
+
+## Prompts
+
+L'app lit ses prompts dans le Google Sheet « ScanCartes – Prompts par rareté » (identifiant dans `config.js`) :
+lignes 6 à 11 de chaque onglet de rareté (colonne English par défaut) et onglet Contextes.
+Le sheet doit être partagé « Toute personne disposant du lien : lecteur ». Si le sheet est injoignable,
+l'app garde la dernière version lue, sinon elle utilise le prompt intégré.

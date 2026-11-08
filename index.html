@@ -269,6 +269,8 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
       </div>
       <p class="status" id="update-status" role="status"></p>
       <span class="net hint" id="net-state"><i></i><span></span></span>
+      <span class="net hint" id="prompt-state"><i></i><span></span></span>
+      <button id="btn-reload-prompts">Recharger les prompts du sheet</button>
     </div>
     <div class="panel">
       <h2>Taux de drop (%)</h2>
@@ -463,22 +465,80 @@ function subjectOf(name,isTitle){
      .replace(/[()\[\]{}|/\\]+/g," ").replace(/\s[-–—,.:;]+\s/g," ").replace(/\s+/g," ").trim();
   return n||clean(name);
 }
-/* Indice de contexte selon la catégorie, pour orienter la scène sans montrer l'emballage */
-function contextOf(c){
+/* Type de produit, qui choisit la phrase de contexte (onglet Contextes du sheet) */
+const DEFAULT_CTX={
+  livre:"It is the title of a book: illustrate its story, world and main character as a book-cover style scene.",
+  album:"It is the title of a music album: illustrate the mood and imagery its title evokes.",
+  animaux:"It is a pet product: feature a lively animal enjoying it, in an imaginative scene.",
+  beaute:"It is a beauty or care product: evoke its ingredients, scent and sensations as an elegant scene.",
+  alimentation:"It is a food or drink: bring its flavours and ingredients to life as a delicious, imaginative scene.",
+  autre:"Interpret the name literally and imaginatively."
+};
+const normKey=s=>(s||"").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").trim();
+function contextType(c){
   const t=((c.category||"")+" "+(c.source||"")).toLowerCase();
-  if(c.source==="Google Books"||c.source==="Open Library"||/livre|book|roman|fiction/.test(t))return "It is the title of a book: illustrate its story, world and main character as a book-cover style scene.";
-  if(c.source==="MusicBrainz"||/album|cd|vinyl/.test(t))return "It is the title of a music album: illustrate the mood and imagery its title evokes.";
-  if(c.source==="Open Pet Food Facts")return "It is a pet product: feature a lively animal enjoying it, in an imaginative scene.";
-  if(c.source==="Open Beauty Facts")return "It is a beauty or care product: evoke its ingredients, scent and sensations as an elegant scene.";
-  if(c.source==="Open Food Facts")return "It is a food or drink: bring its flavours and ingredients to life as a delicious, imaginative scene.";
-  return "Interpret the name literally and imaginatively.";
+  if(c.source==="Google Books"||c.source==="Open Library"||/livre|book|roman|fiction/.test(t))return "livre";
+  if(c.source==="MusicBrainz"||/album|cd|vinyl/.test(t))return "album";
+  if(c.source==="Open Pet Food Facts")return "animaux";
+  if(c.source==="Open Beauty Facts")return "beaute";
+  if(c.source==="Open Food Facts")return "alimentation";
+  return "autre";
 }
 const isTitle=c=>["Google Books","Open Library","MusicBrainz"].includes(c.source);
+
+/* ---------- Prompts pilotés par le Google Sheet « ScanCartes – Prompts par rareté » ----------
+   Chaque onglet de rareté fournit les 6 parties du prompt (lignes 6 à 11), l'onglet Contextes
+   les phrases par type de produit. Lecture publique via l'export gviz (sheet partagé en lecture
+   par lien). En cas d'échec : dernière version mise en cache, sinon prompt intégré à l'app. */
+const SHEET_TABS={commune:"Commune",peu:"Peu commune",rare:"Rare",epique:"Épique",legendaire:"Légendaire"};
+let PROMPTS=LS.get("sc_prompts",null),promptErr="";
+async function gvizRows(sheet,range){
+  const cfg=window.SCANCARTES_CONFIG||{};
+  const url=`https://docs.google.com/spreadsheets/d/${cfg.promptSheetId}/gviz/tq?tqx=out:json&headers=0&sheet=${encodeURIComponent(sheet)}&range=${range}&t=${Date.now()}`;
+  const r=await fetch(url,{cache:"no-store"});
+  if(!r.ok)throw new Error("HTTP "+r.status);
+  const t=await r.text();
+  if(!t.includes("setResponse"))throw new Error("sheet non partagé");
+  const j=JSON.parse(t.slice(t.indexOf("{"),t.lastIndexOf("}")+1));
+  if(j.status==="error")throw new Error((j.errors&&j.errors[0]&&j.errors[0].detailed_message)||"erreur sheet");
+  return (j.table.rows||[]).map(row=>(row.c||[]).map(c=>c&&c.v!=null?String(c.v):""));
+}
+async function loadPrompts(){
+  const cfg=window.SCANCARTES_CONFIG||{};
+  if(!cfg.promptSheetId){promptErr="";return renderPromptState()}
+  const col=cfg.promptLanguage==="fr"?1:2;
+  try{
+    const parts={};
+    await Promise.all(Object.entries(SHEET_TABS).map(async([id,tab])=>{
+      const p=(await gvizRows(tab,"A6:C11")).map(r=>clean(r[col]||"")).filter(Boolean);
+      if(p.length)parts[id]=p;
+    }));
+    const ctx={};
+    (await gvizRows("Contextes","A2:C7")).forEach(r=>{if(r[0]&&r[col])ctx[normKey(r[0])]=clean(r[col])});
+    if(Object.keys(parts).length<5)throw new Error("un onglet de rareté est vide ou renommé");
+    PROMPTS={parts,ctx,at:Date.now()};LS.set("sc_prompts",PROMPTS);promptErr="";
+  }catch(e){promptErr=e.message||"sheet injoignable"}
+  renderPromptState();
+}
+function renderPromptState(){
+  const el2=$("#prompt-state");if(!el2)return;
+  const cfg=window.SCANCARTES_CONFIG||{},on=!!PROMPTS&&!!cfg.promptSheetId;
+  el2.classList.toggle("on",on&&!promptErr);
+  el2.querySelector("span").textContent=!cfg.promptSheetId?"Prompts intégrés à l'app (aucun sheet configuré).":
+    promptErr?(PROMPTS?"Sheet des prompts injoignable ("+promptErr+") : dernière version lue le "+new Date(PROMPTS.at).toLocaleString("fr-FR")+".":"Sheet des prompts injoignable ("+promptErr+") : prompts intégrés à l'app."):
+    !PROMPTS?"Lecture des prompts dans le Google Sheet…":
+    "Prompts lus dans le Google Sheet le "+new Date(PROMPTS.at).toLocaleString("fr-FR")+".";
+}
+
 function buildPrompt(c){
-  const r=RAR[c.rarity]||RARITIES[0];
+  const r=RAR[c.rarity]||RARITIES[0],subj=subjectOf(c.name,isTitle(c)),type=contextType(c);
+  if(PROMPTS&&PROMPTS.parts&&PROMPTS.parts[r.id]){
+    const ctx=(PROMPTS.ctx&&(PROMPTS.ctx[type]||PROMPTS.ctx.autre))||DEFAULT_CTX[type];
+    return PROMPTS.parts[r.id].join(" ").split("{sujet}").join(subj).split("{contexte}").join(ctx).replace(/\s+/g," ").trim();
+  }
   return [
-    `Trading card illustration. Main subject: "${subjectOf(c.name,isTitle(c))}".`,
-    contextOf(c),
+    `Trading card illustration. Main subject: "${subj}".`,
+    DEFAULT_CTX[type],
     `Show the subject itself as a striking scene inspired by its name, not a packshot, not a box, not packaging.`,
     `One clear focal subject, centered, square composition, readable silhouette, rich textures, coherent perspective.`,
     `Style: ${r.style}.`,
@@ -1137,7 +1197,7 @@ $("#btn-reset-rates").addEventListener("click",()=>saveRates({...DEFAULT_RATES})
 renderRates();
 
 /* ---------- Version & mises à jour ---------- */
-const APP_VERSION="1.7.0";
+const APP_VERSION="1.8.0";
 function cmpVer(a,b){const x=a.split(".").map(Number),y=b.split(".").map(Number);for(let i=0;i<3;i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)-(y[i]||0)}return 0}
 async function checkUpdate(manual){
   const st=$("#update-status");
@@ -1173,7 +1233,9 @@ $("#btn-update").addEventListener("click",async e=>{
   else toast($("#update-status").textContent||"Tu as la dernière version.");
 });
 checkUpdate(false);
-document.addEventListener("visibilitychange",()=>{if(!document.hidden)checkUpdate(false)});
+document.addEventListener("visibilitychange",()=>{if(!document.hidden){checkUpdate(false);loadPrompts()}});
+$("#btn-reload-prompts").addEventListener("click",async e=>{e.currentTarget.disabled=true;await loadPrompts();e.currentTarget.disabled=false;toast(promptErr?"Sheet injoignable : "+promptErr:"Prompts rechargés depuis le sheet.")});
+renderPromptState();loadPrompts();
 
 </script>
 
