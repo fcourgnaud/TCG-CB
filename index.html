@@ -145,6 +145,9 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
 .glow-legendaire{filter:drop-shadow(0 0 22px #ffcf4a)}
 .glow-epique{filter:drop-shadow(0 0 18px #b26bff)}
 .glow-rare{filter:drop-shadow(0 0 14px #4aa3ff)}
+.prompt-box{width:100%;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px;color:var(--muted)}
+.prompt-box summary{cursor:pointer;font-weight:600;color:var(--fg)}
+.prompt-box p{font-size:.75rem;line-height:1.5;margin:.6rem 0 0;overflow-wrap:anywhere}
 .confirm{display:flex;flex-direction:column;gap:8px;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
 
 .rates{display:grid;grid-template-columns:1fr 80px 64px;gap:8px 12px;align-items:center}
@@ -292,15 +295,15 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
 /* ---------- Raretés (modifiables dans Réglages) ---------- */
 const RARITIES = [
   {id:"commune",    label:"Commune",     rate:55, gems:1, c:["#c9d1d6","#6f7d86"], ink:"#2b343a",
-   style:"clean simple illustration, soft flat colors, plain pastel background, friendly and modest"},
+   style:"charming storybook illustration, soft flat colors, gentle daylight, simple pastel background, calm and friendly mood"},
   {id:"peu",        label:"Peu commune", rate:25, gems:2, c:["#9be38a","#2f8a4a"], ink:"#123d22",
-   style:"detailed painterly illustration, lush green natural backdrop, warm daylight"},
+   style:"detailed painterly illustration, lush natural setting, warm golden-hour light, soft depth of field"},
   {id:"rare",       label:"Rare",        rate:12, gems:3, c:["#7cc7ff","#2457c9"], ink:"#0d2559",
-   style:"dynamic heroic composition, glowing blue magical aura, dramatic rim lighting, sparkles"},
+   style:"dynamic heroic composition, glowing blue magical aura, dramatic rim lighting, floating sparkles, cinematic depth"},
   {id:"epique",     label:"Épique",      rate:6,  gems:4, c:["#d59bff","#6a2bbf"], ink:"#2c0d57",
-   style:"epic fantasy artwork, swirling purple arcane energy, cinematic lighting, ornate intricate details"},
+   style:"epic fantasy concept art, swirling violet arcane energy, volumetric light, ornate intricate details, grand sense of scale"},
   {id:"legendaire", label:"Légendaire",  rate:2,  gems:5, c:["#fff0a8","#d18a12"], ink:"#4a2c00",
-   style:"legendary mythic masterpiece, radiant golden light rays, divine celestial atmosphere, floating particles, ultra detailed"}
+   style:"legendary mythic masterpiece, radiant golden god rays, celestial atmosphere, floating golden particles, awe-inspiring, ultra detailed"}
 ];
 const RAR = Object.fromEntries(RARITIES.map(r=>[r.id,r]));
 const DEFAULT_RATES=Object.fromEntries(RARITIES.map(r=>[r.id,r.rate]));
@@ -448,13 +451,39 @@ async function lookup(code,onProgress){
 }
 
 /* ---------- Génération d'image ---------- */
-const SHARED_STYLE="vibrant collectible trading card illustration, rich colors, soft dramatic lighting, clean painterly details, simple atmospheric background";
+/* ---------- Prompt : le nom du produit devient le sujet de l'illustration ---------- */
+/* Retire du nom ce qui n'est pas un sujet : poids, volumes, lots, codes, pourcentages */
+function subjectOf(name,isTitle){
+  if(isTitle)return clean(name); // titre de livre ou d'album : on le garde tel quel
+  let n=" "+(name||"")+" ";
+  n=n.replace(/\b\d+([.,]\d+)?\s?(kg|g|gr|mg|l|cl|ml|dl|oz|lb|cm|mm|m|%|pcs?|pièces?|sachets?|capsules?|dosettes?|tranches?)\b/gi," ")
+     .replace(/\b(x|×)\s?\d+\b|\b\d+\s?(x|×)\b/gi," ")
+     .replace(/\b(lot|pack|format|bo[iî]te|bouteille|paquet|flacon|tube|pot|barquette|étui|recharge)s?\s+(de|d'|familial|éco)?\b/gi," ")
+     .replace(/(^|\s)\d+([.,]\d+)?(?=\s)/g," ")
+     .replace(/[()\[\]{}|/\\]+/g," ").replace(/\s[-–—,.:;]+\s/g," ").replace(/\s+/g," ").trim();
+  return n||clean(name);
+}
+/* Indice de contexte selon la catégorie, pour orienter la scène sans montrer l'emballage */
+function contextOf(c){
+  const t=((c.category||"")+" "+(c.source||"")).toLowerCase();
+  if(c.source==="Google Books"||c.source==="Open Library"||/livre|book|roman|fiction/.test(t))return "It is the title of a book: illustrate its story, world and main character as a book-cover style scene.";
+  if(c.source==="MusicBrainz"||/album|cd|vinyl/.test(t))return "It is the title of a music album: illustrate the mood and imagery its title evokes.";
+  if(c.source==="Open Pet Food Facts")return "It is a pet product: feature a lively animal enjoying it, in an imaginative scene.";
+  if(c.source==="Open Beauty Facts")return "It is a beauty or care product: evoke its ingredients, scent and sensations as an elegant scene.";
+  if(c.source==="Open Food Facts")return "It is a food or drink: bring its flavours and ingredients to life as a delicious, imaginative scene.";
+  return "Interpret the name literally and imaginatively.";
+}
+const isTitle=c=>["Google Books","Open Library","MusicBrainz"].includes(c.source);
 function buildPrompt(c){
   const r=RAR[c.rarity]||RARITIES[0];
-  return `Collectible trading card artwork featuring the product "${c.name}"`+
-    (c.brand?` by ${c.brand}`:"")+(c.category?` (${c.category})`:"")+
-    `. The product is the hero of the image, centered and clearly recognizable. Style: ${r.style}. `+
-    `Square composition, no text, no letters, no logos, no card border or frame.`;
+  return [
+    `Trading card illustration. Main subject: "${subjectOf(c.name,isTitle(c))}".`,
+    contextOf(c),
+    `Show the subject itself as a striking scene inspired by its name, not a packshot, not a box, not packaging.`,
+    `One clear focal subject, centered, square composition, readable silhouette, rich textures, coherent perspective.`,
+    `Style: ${r.style}.`,
+    `No text, no letters, no words, no logos, no brand names, no labels, no watermark, no card frame or border.`
+  ].join(" ");
 }
 /* Pollinations, accès sans clé : une image à la fois, ~45 s entre deux images */
 const POLL_GAP=46000;
@@ -769,6 +798,7 @@ function showDetail(card){
   const holder=el("div",{style:"width:min(78vw,300px)"},cardEl(card));
   const info=[card.category,card.source,(card.copies||1)>1?"×"+card.copies+" exemplaires":"",card.discoverer?"Découverte par toi":""].filter(Boolean).join(" · ");
   const msg=el("p",{class:"ov-msg"},info);
+  const promptBox=el("details",{class:"prompt-box"},el("summary",{},"Voir le prompt"),el("p",{class:"mono"},buildPrompt(card)));
   const actions=el("div",{class:"ov-actions"});
   const render=()=>{
     const btns=[el("button",{class:"primary",onclick:()=>exportCard(card)},"Télécharger")];
@@ -794,7 +824,7 @@ function showDetail(card){
         el("button",{onclick:render},"Annuler"))));
   }
   render();
-  ov.replaceChildren(el("div",{class:"ov-body"},holder,msg,actions));
+  ov.replaceChildren(el("div",{class:"ov-body"},holder,msg,actions,promptBox));
 }
 
 /* ---------- Collection ---------- */
@@ -1107,7 +1137,7 @@ $("#btn-reset-rates").addEventListener("click",()=>saveRates({...DEFAULT_RATES})
 renderRates();
 
 /* ---------- Version & mises à jour ---------- */
-const APP_VERSION="1.6.1";
+const APP_VERSION="1.7.0";
 function cmpVer(a,b){const x=a.split(".").map(Number),y=b.split(".").map(Number);for(let i=0;i<3;i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)-(y[i]||0)}return 0}
 async function checkUpdate(manual){
   const st=$("#update-status");

@@ -1,4 +1,4 @@
 {
-  "version": "1.6.1",
-  "notes": "taux de drop : message de confirmation, virgule acceptée, aperçu en direct"
+  "version": "1.7.0",
+  "notes": "nouveau prompt : le nom du produit devient le sujet de l'illustration"
 }
