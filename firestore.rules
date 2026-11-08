@@ -6,6 +6,20 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // Compte administrateur (Firebase Authentication) : seul autorisé à réinitialiser les illustrations.
+    // Remplacer par l'UID du compte (console Firebase → Authentication → Utilisateurs → UID).
+    function isAdmin() {
+      return request.auth != null && request.auth.uid in ['UID_ADMIN_A_REMPLACER'];
+    }
+
+    // Saison des illustrations : lue par toutes les apps, modifiée seulement par l'administrateur
+    match /settings/{doc} {
+      allow read: if true;
+      allow write: if isAdmin() && doc == 'global'
+        && request.resource.data.keys().hasOnly(['epoch','resetAt'])
+        && request.resource.data.epoch is int;
+    }
+
     match /products/{code} {
       allow read: if true;
       allow create: if code.matches('^[0-9]{8,14}$')
@@ -36,8 +50,8 @@ service cloud.firestore {
               && request.resource.data.image.size() < 900000)
         );
 
-      // Une illustration prête est figée pour toujours
-      allow delete: if false;
+      // Une illustration prête est figée ; seul l'administrateur peut tout réinitialiser
+      allow delete: if isAdmin();
     }
   }
 }
