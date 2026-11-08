@@ -181,6 +181,13 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
       <button class="primary" type="submit">Tirer</button>
     </form>
     <p class="status" id="status" role="status"></p>
+    <form class="panel" id="unknown" hidden>
+      <h2>Produit inconnu des bases</h2>
+      <p class="hint" style="margin:0">Le code <b class="mono" id="unknown-code"></b> n'est dans aucune base gratuite. Donne-lui un nom pour créer quand même sa carte.</p>
+      <label for="unknown-name">Nom du produit<input id="unknown-name" required autocomplete="off" placeholder="ex. Manette de jeu sans fil"></label>
+      <label for="unknown-brand">Marque (facultatif)<input id="unknown-brand" autocomplete="off"></label>
+      <div class="row"><button class="primary" type="submit">Créer la carte</button><button type="button" id="unknown-cancel">Annuler</button></div>
+    </form>
     <div class="panel">
       <h2>Taux de drop</h2>
       <div class="chips" id="rate-chips"></div>
@@ -329,25 +336,78 @@ function cardEl(c,{example=false,loading=false,msg=""}={}){
 }
 
 /* ---------- Recherche produit ---------- */
+/* Toutes les bases gratuites interrogeables depuis le téléphone, en parallèle.
+   La première réponse valide dans l'ordre de priorité l'emporte. */
+function withTimeout(p,ms=7000){return Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),ms))])}
+async function getJSON(url){const r=await fetch(url,{headers:{Accept:"application/json"}});if(!r.ok)throw new Error(r.status);return r.json()}
+const clean=s=>(s||"").replace(/\s+/g," ").trim();
+const firstOf=s=>clean((s||"").split(",")[0]);
+const lastCat=s=>clean((s||"").split(",").map(x=>x.trim()).filter(Boolean).slice(-1)[0]||"").replace(/^[a-z]{2}:/,"");
+
+function offSource(label,base,domain){
+  return {label,domain,run:async code=>{
+    const j=await getJSON(`${base}/api/v2/product/${code}.json?fields=product_name,product_name_fr,generic_name_fr,brands,categories,image_front_url,image_url`);
+    if(j.status!==1||!j.product)return null;
+    const p=j.product,name=clean(p.product_name_fr||p.product_name||p.generic_name_fr);
+    if(!name)return null;
+    return {name,brand:firstOf(p.brands),category:lastCat(p.categories),productImage:p.image_front_url||p.image_url||""};
+  }};
+}
+function isbnOf(code){return /^97[89]\d{10}$/.test(code)?code:null}
+
 const SOURCES=[
-  ["Open Food Facts","https://world.openfoodfacts.org"],
-  ["Open Beauty Facts","https://world.openbeautyfacts.org"],
-  ["Open Products Facts","https://world.openproductsfacts.org"]
+  // Livres (codes ISBN 978/979)
+  {label:"Google Books",domain:"livre",only:isbnOf,run:async code=>{
+    const j=await getJSON(`https://www.googleapis.com/books/v1/volumes?q=isbn:${code}&maxResults=1`);
+    const v=j.items&&j.items[0]&&j.items[0].volumeInfo;if(!v||!v.title)return null;
+    return {name:clean(v.title+(v.subtitle?" : "+v.subtitle:"")),brand:(v.authors||[]).slice(0,2).join(", "),category:(v.categories||["Livre"])[0],productImage:(v.imageLinks&&(v.imageLinks.thumbnail||v.imageLinks.smallThumbnail)||"").replace("http:","https:")};
+  }},
+  {label:"Open Library",domain:"livre",only:isbnOf,run:async code=>{
+    const j=await getJSON(`https://openlibrary.org/api/books?bibkeys=ISBN:${code}&format=json&jscmd=data`);
+    const b=j["ISBN:"+code];if(!b||!b.title)return null;
+    return {name:clean(b.title+(b.subtitle?" : "+b.subtitle:"")),brand:(b.authors||[]).slice(0,2).map(a=>a.name).join(", ")||(b.publishers||[{}])[0].name||"",category:((b.subjects||[])[0]||{}).name||"Livre",productImage:(b.cover&&(b.cover.medium||b.cover.small))||""};
+  }},
+  // Alimentation, cosmétiques, animaux, autres produits
+  offSource("Open Food Facts","https://world.openfoodfacts.org","alimentation"),
+  offSource("Open Beauty Facts","https://world.openbeautyfacts.org","cosmétique"),
+  offSource("Open Pet Food Facts","https://world.openpetfoodfacts.org","animaux"),
+  offSource("Open Products Facts","https://world.openproductsfacts.org","produit"),
+  // Musique (CD, vinyles)
+  {label:"MusicBrainz",domain:"musique",run:async code=>{
+    const j=await getJSON(`https://musicbrainz.org/ws/2/release/?query=barcode:${code}&fmt=json&limit=1`);
+    const r=j.releases&&j.releases[0];if(!r||!r.title||(r.score!=null&&r.score<90))return null;
+    const artist=(r["artist-credit"]||[]).map(a=>a.name+(a.joinphrase||"")).join("");
+    const media=((r.media||[])[0]||{}).format||"Album";
+    return {name:clean(r.title),brand:clean(artist),category:media,productImage:`https://coverartarchive.org/release/${r.id}/front-250`};
+  }},
+  // Wikidata : jeux, jouets, électronique, véhicules… tout objet qui a un GTIN renseigné
+  {label:"Wikidata",domain:"divers",run:async code=>{
+    const alts=[...new Set([code,code.replace(/^0+/,""),code.padStart(13,"0"),code.padStart(14,"0")])].map(c=>`"${c}"`).join(" ");
+    const q=`SELECT ?item ?itemLabel ?brandLabel ?typeLabel ?img WHERE { VALUES ?g { ${alts} } ?item wdt:P3962 ?g . OPTIONAL{?item wdt:P1716|wdt:P176|wdt:P123 ?brand} OPTIONAL{?item wdt:P31 ?type} OPTIONAL{?item wdt:P18 ?img} SERVICE wikibase:label { bd:serviceParam wikibase:language "fr,en". } } LIMIT 1`;
+    const j=await getJSON("https://query.wikidata.org/sparql?format=json&query="+encodeURIComponent(q));
+    const b=j.results&&j.results.bindings[0];if(!b||!b.itemLabel)return null;
+    const name=b.itemLabel.value;if(/^Q\d+$/.test(name))return null;
+    return {name,brand:b.brandLabel?b.brandLabel.value:"",category:b.typeLabel?b.typeLabel.value:"",productImage:b.img?b.img.value.replace("http:","https:"):""};
+  }}
 ];
-async function lookup(code){
-  for(const[name,base]of SOURCES){
-    try{
-      const r=await fetch(`${base}/api/v2/product/${code}.json?fields=product_name,product_name_fr,generic_name_fr,brands,categories,image_front_url`);
-      if(!r.ok)continue;
-      const j=await r.json();
-      if(j.status!==1||!j.product)continue;
-      const p=j.product;
-      const pname=(p.product_name_fr||p.product_name||p.generic_name_fr||"").trim();
-      if(!pname)continue;
-      return {name:pname,brand:(p.brands||"").split(",")[0].trim(),category:(p.categories||"").split(",").map(s=>s.trim()).filter(Boolean).slice(-1)[0]||"",source:name,productImage:p.image_front_url||""};
-    }catch(e){}
-  }
-  return null;
+
+async function lookup(code,onProgress){
+  const list=SOURCES.filter(s=>!s.only||s.only(code));
+  let done=0;
+  const runs=list.map(s=>withTimeout(s.run(code)).then(r=>r?{...r,source:s.label,domain:s.domain}:null).catch(()=>null)
+    .finally(()=>{done++;onProgress&&onProgress(done,list.length)}));
+  // Réponse dès que la meilleure source disponible a répondu (sans attendre les plus lentes)
+  return new Promise(resolve=>{
+    const res=new Array(runs.length);let settled=0;
+    const decide=()=>{
+      for(let i=0;i<res.length;i++){
+        if(res[i]===undefined)return;   // une source prioritaire n'a pas encore répondu
+        if(res[i])return resolve(res[i]);
+      }
+      resolve(null);
+    };
+    runs.forEach((p,i)=>p.then(r=>{res[i]=r;settled++;decide()}));
+  });
 }
 
 /* ---------- Génération d'image ---------- */
@@ -429,18 +489,38 @@ document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!ov.hidden&&!ov.dat
 async function nextSerial(){const a=await allCards();return a.reduce((m,c)=>Math.max(m,c.serial||0),0)+1}
 
 /* Tirage complet après un scan */
+let drawing=false;
 async function draw(code){
+  if(drawing)return;
   const status=$("#status");
   code=String(code).replace(/\D/g,"");
   if(![8,12,13,14].includes(code.length)){status.className="status err";status.textContent="Code invalide : il faut 8, 12, 13 ou 14 chiffres.";return}
+  $("#unknown").hidden=true;
+  drawing=true;
   status.className="status";status.textContent="Recherche du produit "+code+"…";
-  const p=await lookup(code);
-  if(!p){status.className="status err";status.textContent="Produit introuvable pour "+code+" dans Open Food, Beauty et Products Facts.";return}
+  let p=null,searching=true;
+  try{p=await lookup(code,(d,n)=>{if(searching)status.textContent="Recherche du produit "+code+"… ("+d+"/"+n+" bases)"})}finally{drawing=false;searching=false}
+  if(!p){
+    status.className="status err";status.textContent="Introuvable dans "+SOURCES.filter(s=>!s.only||s.only(code)).map(s=>s.label).join(", ")+".";
+    $("#unknown-code").textContent=code;$("#unknown").dataset.code=code;$("#unknown").hidden=false;$("#unknown-name").value="";$("#unknown-brand").value="";
+    $("#unknown-name").focus();
+    return;
+  }
   status.textContent="";
+  createCard(code,p);
+}
+async function createCard(code,p){
   const card={code,...p,rarity:roll(),serial:await nextSerial(),createdAt:Date.now(),image:null};
   try{card.id=await putCard(card)}catch(e){}
   showReveal(card);
 }
+$("#unknown").addEventListener("submit",e=>{
+  e.preventDefault();
+  const name=clean($("#unknown-name").value);if(!name)return;
+  $("#unknown").hidden=true;$("#status").textContent="";
+  createCard($("#unknown").dataset.code,{name,brand:clean($("#unknown-brand").value),category:"",source:"Saisie manuelle"});
+});
+$("#unknown-cancel").addEventListener("click",()=>{$("#unknown").hidden=true;$("#status").textContent=""});
 
 function showReveal(card){
   const r=RAR[card.rarity];
@@ -798,7 +878,7 @@ $("#btn-save-rates").addEventListener("click",()=>{
 renderRates();
 
 /* ---------- Version & mises à jour ---------- */
-const APP_VERSION="1.1.0";
+const APP_VERSION="1.2.0";
 function cmpVer(a,b){const x=a.split(".").map(Number),y=b.split(".").map(Number);for(let i=0;i<3;i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)-(y[i]||0)}return 0}
 async function checkUpdate(manual){
   const st=$("#update-status");
