@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1d24">
+<title>ScanCartes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rowdies:wght@400;700&family=Outfit:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout : app mobile une colonne, trois onglets (Scanner, Collection, Réglages), barre fixe en bas. Look unique "tapis de jeu" sombre. */
+:root{
+  color-scheme:dark;
+  --bg:#0f1d24; --panel:#162a35; --panel2:#1d3644; --line:#2a4757;
+  --fg:#eaf2f3; --muted:#90aab3; --accent:#ffcf4a; --danger:#ff7a6b;
+  --f-display:"Rowdies","Arial Black",system-ui,sans-serif;
+  --f-body:"Outfit",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  --tab-h:64px;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{background:var(--bg) radial-gradient(120% 60% at 50% 0%,#17303d 0%,var(--bg) 70%) fixed;color:var(--fg);font-family:var(--f-body);font-size:15px;line-height:1.45;margin:0}
+main{max-width:560px;margin:0 auto;padding-inline:16px;padding-block:20px calc(var(--tab-h) + 32px + env(safe-area-inset-bottom,0px))}
+h1,h2{font-family:var(--f-display);font-weight:700;letter-spacing:.01em;text-wrap:balance;margin:0}
+h1{font-size:1.7rem}
+h2{font-size:1.15rem}
+.sub{color:var(--muted);margin:.25rem 0 0}
+.stack{display:flex;flex-direction:column;gap:16px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button{font:inherit;cursor:pointer;border:0;border-radius:12px;padding:.75rem 1rem;font-weight:600;color:var(--fg);background:var(--panel2);border:1px solid var(--line)}
+button.primary{background:var(--accent);color:#2a1d00;border-color:transparent}
+button.danger{color:var(--danger)}
+button:disabled{opacity:.5;cursor:default}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input,select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:.7rem .8rem;min-width:0;width:100%}
+label{display:flex;flex-direction:column;gap:6px;font-weight:500}
+.hint{color:var(--muted);font-size:.85rem;font-weight:400}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+
+/* Scanner */
+.viewer{position:relative;aspect-ratio:4/3;max-width:100%;border-radius:18px;overflow:hidden;background:#081218;border:1px solid var(--line)}
+.viewer video{width:100%;height:100%;object-fit:cover;display:block}
+.viewer .idle{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--muted);text-align:center;padding:16px}
+.reticle{position:absolute;left:12%;right:12%;top:34%;bottom:34%;border:2px solid var(--accent);border-radius:10px;box-shadow:0 0 0 999px rgba(0,0,0,.35);pointer-events:none}
+.reticle::after{content:"";position:absolute;left:4%;right:4%;top:50%;height:2px;background:var(--danger);box-shadow:0 0 10px var(--danger);animation:laser 1.6s ease-in-out infinite}
+@keyframes laser{0%,100%{transform:translateY(-14px)}50%{transform:translateY(14px)}}
+.manual{display:flex;gap:8px}
+.manual input{flex:1}
+.status{min-height:1.4em;color:var(--muted)}
+.status.err{color:var(--danger)}
+
+/* Tab bar */
+nav.tabs{position:fixed;left:0;right:0;bottom:0;padding:8px 12px calc(8px + env(safe-area-inset-bottom,0px));background:rgba(15,29,36,.94);backdrop-filter:blur(8px);border-top:1px solid var(--line);display:flex;justify-content:center;gap:6px;z-index:20}
+nav.tabs button{flex:1;max-width:180px;background:transparent;border:0;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:2px;padding:.4rem;font-size:.8rem}
+nav.tabs button svg{width:24px;height:24px}
+nav.tabs button[aria-selected="true"]{color:var(--accent)}
+
+/* Rarity colours (frame stops + ink) */
+.r-commune{--f1:#c9d1d6;--f2:#6f7d86;--gem:#dfe6ea;--ink:#2b343a}
+.r-peu{--f1:#9be38a;--f2:#2f8a4a;--gem:#b9f5a8;--ink:#123d22}
+.r-rare{--f1:#7cc7ff;--f2:#2457c9;--gem:#a9dcff;--ink:#0d2559}
+.r-epique{--f1:#d59bff;--f2:#6a2bbf;--gem:#e9c6ff;--ink:#2c0d57}
+.r-legendaire{--f1:#fff0a8;--f2:#d18a12;--gem:#fff6c9;--ink:#4a2c00}
+
+/* Card */
+.card{container-type:inline-size;position:relative;aspect-ratio:63/88;width:100%;border-radius:4.5cqw;padding:3.2cqw;background:linear-gradient(145deg,var(--f1),var(--f2) 55%,var(--f1));box-shadow:0 6px 18px rgba(0,0,0,.45);overflow:hidden;color:var(--ink)}
+.card-in{height:100%;border-radius:3cqw;background:linear-gradient(180deg,rgba(255,255,255,.55),rgba(255,255,255,.2));display:grid;grid-template-rows:auto 1fr auto auto;gap:2.4cqw;padding:3cqw}
+.c-top{display:flex;justify-content:space-between;align-items:center;gap:2cqw;min-width:0}
+.c-name{font-family:var(--f-display);font-size:6.2cqw;line-height:1.05;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;min-width:0}
+.c-gems{display:flex;gap:.8cqw;flex-shrink:0}
+.c-gems i{width:3.6cqw;height:3.6cqw;transform:rotate(45deg);background:var(--gem);border:.5cqw solid var(--ink);display:block}
+.c-art{position:relative;border-radius:2cqw;overflow:hidden;background:var(--ink);border:1cqw solid var(--ink);min-height:0}
+.c-art img{width:100%;height:100%;object-fit:cover;display:block}
+.c-art .ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:6cqw;color:var(--gem);font-family:var(--f-display);font-size:16cqw;background:radial-gradient(circle at 50% 40%,var(--f2),var(--ink) 75%)}
+.c-art .ph.small{font-family:var(--f-body);font-size:5cqw;font-weight:600}
+.c-art.loading .ph{background:linear-gradient(110deg,var(--ink) 30%,var(--f2) 50%,var(--ink) 70%);background-size:300% 100%;animation:shine 1.4s linear infinite}
+@keyframes shine{from{background-position:100% 0}to{background-position:-100% 0}}
+.c-bot{display:flex;justify-content:space-between;align-items:baseline;gap:2cqw;font-size:4.4cqw;font-weight:600}
+.c-brand{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-width:0}
+.c-rar{font-family:var(--f-display);text-transform:uppercase;letter-spacing:.06em;font-size:3.8cqw;flex-shrink:0}
+.c-code{font-family:var(--f-mono);font-size:3.4cqw;display:flex;justify-content:space-between;opacity:.8}
+.card.r-legendaire::after,.card.r-epique::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(115deg,transparent 35%,rgba(255,255,255,.55) 48%,transparent 60%);background-size:250% 100%;mix-blend-mode:overlay;animation:holo 3.2s ease-in-out infinite}
+.card.r-epique::after{opacity:.6;animation-duration:4.5s}
+@keyframes holo{0%{background-position:120% 0}100%{background-position:-120% 0}}
+.badge-ex{position:absolute;top:2cqw;left:50%;transform:translateX(-50%);background:var(--bg);color:var(--fg);font:600 3.4cqw var(--f-body);padding:.6cqw 2.4cqw;border-radius:99px;z-index:2}
+
+/* Collection */
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:.3rem .65rem;border-radius:99px;background:var(--panel);border:1px solid var(--line);font-size:.85rem}
+.chip i{width:9px;height:9px;transform:rotate(45deg);background:var(--f2);display:block}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+@media (min-width:520px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.grid button.cardbtn{padding:0;border:0;background:none;border-radius:12px;text-align:left}
+
+/* Overlay */
+.overlay{position:fixed;inset:0;z-index:40;background:rgba(5,12,16,.86);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:calc(16px + env(safe-area-inset-top,0px)) 16px calc(16px + env(safe-area-inset-bottom,0px));overflow-y:auto}
+.ov-body{width:100%;max-width:340px;display:flex;flex-direction:column;align-items:center;gap:14px;margin:auto}
+.ov-title{font-family:var(--f-display);font-size:1.4rem;text-align:center}
+.ov-msg{color:var(--muted);text-align:center;min-height:1.4em}
+.ov-msg.err{color:var(--danger)}
+.ov-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;width:100%}
+.ov-actions button{flex:1 1 140px}
+.flip{width:min(78vw,300px);perspective:1200px}
+.flip-inner{position:relative;transition:transform .9s cubic-bezier(.2,.7,.2,1);transform-style:preserve-3d}
+.flip.shown .flip-inner{transform:rotateY(180deg)}
+.flip .face{backface-visibility:hidden;-webkit-backface-visibility:hidden}
+.flip .front{position:absolute;inset:0;transform:rotateY(180deg)}
+.back{container-type:inline-size;aspect-ratio:63/88;border-radius:4.5cqw;background:repeating-linear-gradient(45deg,#1d3644 0 4cqw,#162a35 4cqw 8cqw);border:3cqw solid var(--accent);display:flex;align-items:center;justify-content:center;box-shadow:0 6px 18px rgba(0,0,0,.45)}
+.back span{font-family:var(--f-display);color:var(--accent);font-size:11cqw;transform:rotate(-12deg)}
+.glow-legendaire{filter:drop-shadow(0 0 22px #ffcf4a)}
+.glow-epique{filter:drop-shadow(0 0 18px #b26bff)}
+.glow-rare{filter:drop-shadow(0 0 14px #4aa3ff)}
+.confirm{display:flex;flex-direction:column;gap:8px;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
+
+.rates{display:grid;grid-template-columns:1fr 90px;gap:8px 12px;align-items:center}
+.rates span{display:flex;align-items:center;gap:8px}
+.rates span i{width:10px;height:10px;transform:rotate(45deg);background:var(--f2);display:block}
+.empty{color:var(--muted);text-align:center;padding:8px 0}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+<main>
+  <!-- SCANNER -->
+  <section id="tab-scan" class="stack">
+    <header>
+      <h1>ScanCartes</h1>
+      <p class="sub">Scanne un code-barres, tire une carte.</p>
+    </header>
+    <div class="viewer" id="viewer">
+      <video id="video" playsinline muted hidden></video>
+      <div class="reticle" id="reticle" hidden></div>
+      <div class="idle" id="idle">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M10 8v8M13 8v8M16 8v8"/></svg>
+        <button class="primary" id="btn-cam">Ouvrir la caméra</button>
+      </div>
+    </div>
+    <div class="row" id="cam-ctrl" hidden><button id="btn-stop">Arrêter la caméra</button></div>
+    <form class="manual" id="manual">
+      <input id="code-input" inputmode="numeric" autocomplete="off" placeholder="Ou tape le code, ex. 3017620422003" aria-label="Code-barres">
+      <button class="primary" type="submit">Tirer</button>
+    </form>
+    <p class="status" id="status" role="status"></p>
+    <div class="panel">
+      <h2>Taux de drop</h2>
+      <div class="chips" id="rate-chips"></div>
+    </div>
+  </section>
+
+  <!-- COLLECTION -->
+  <section id="tab-col" class="stack" hidden>
+    <header>
+      <h1>Collection</h1>
+      <p class="sub" id="col-count"></p>
+    </header>
+    <div class="chips" id="col-chips"></div>
+    <div class="grid" id="grid"></div>
+  </section>
+
+  <!-- RÉGLAGES -->
+  <section id="tab-set" class="stack" hidden>
+    <header>
+      <h1>Réglages</h1>
+      <p class="sub">Stockés uniquement sur ce téléphone.</p>
+    </header>
+    <div class="panel">
+      <h2>Génération d'image (OpenAI)</h2>
+      <label for="set-key">Clé API OpenAI
+        <input id="set-key" type="password" autocomplete="off" placeholder="sk-…">
+        <span class="hint">À créer sur platform.openai.com → API keys. Chaque image est facturée sur ton compte OpenAI.</span>
+      </label>
+      <label for="set-model">Modèle
+        <input id="set-model" list="models" autocomplete="off">
+        <datalist id="models"><option value="gpt-image-1"></option><option value="gpt-image-1-mini"></option><option value="dall-e-3"></option></datalist>
+        <span class="hint">Si le modèle est refusé (compte non vérifié), essaie dall-e-3.</span>
+      </label>
+      <label for="set-quality">Qualité
+        <select id="set-quality"><option value="low">Basse (moins chère)</option><option value="medium">Moyenne</option><option value="high">Haute</option></select>
+      </label>
+      <button class="primary" id="btn-save-set">Enregistrer</button>
+      <p class="status" id="set-status" role="status"></p>
+    </div>
+    <div class="panel">
+      <h2>Taux de drop (%)</h2>
+      <div class="rates" id="rates"></div>
+      <span class="hint">Les taux sont ramenés à 100 % automatiquement.</span>
+      <button id="btn-save-rates">Enregistrer les taux</button>
+    </div>
+  </section>
+</main>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" data-tab="scan" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M11 8v8M15 8v8"/></svg>Scanner</button>
+  <button role="tab" data-tab="col" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="5" width="11" height="15" rx="2"/><path d="M17 5.5l2.6.7a2 2 0 0 1 1.4 2.4l-2.9 10.8"/></svg>Collection</button>
+  <button role="tab" data-tab="set" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Réglages</button>
+</nav>
+
+<div class="overlay" id="overlay" hidden></div>
+
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script>
+"use strict";
+/* ---------- Raretés (modifiables dans Réglages) ---------- */
+const RARITIES = [
+  {id:"commune",    label:"Commune",     rate:55, gems:1, c:["#c9d1d6","#6f7d86"], ink:"#2b343a",
+   style:"clean simple illustration, soft flat colors, plain pastel background, friendly and modest"},
+  {id:"peu",        label:"Peu commune", rate:25, gems:2, c:["#9be38a","#2f8a4a"], ink:"#123d22",
+   style:"detailed painterly illustration, lush green natural backdrop, warm daylight"},
+  {id:"rare",       label:"Rare",        rate:12, gems:3, c:["#7cc7ff","#2457c9"], ink:"#0d2559",
+   style:"dynamic heroic composition, glowing blue magical aura, dramatic rim lighting, sparkles"},
+  {id:"epique",     label:"Épique",      rate:6,  gems:4, c:["#d59bff","#6a2bbf"], ink:"#2c0d57",
+   style:"epic fantasy artwork, swirling purple arcane energy, cinematic lighting, ornate intricate details"},
+  {id:"legendaire", label:"Légendaire",  rate:2,  gems:5, c:["#fff0a8","#d18a12"], ink:"#4a2c00",
+   style:"legendary mythic masterpiece, radiant golden light rays, divine celestial atmosphere, floating particles, ultra detailed"}
+];
+const RAR = Object.fromEntries(RARITIES.map(r=>[r.id,r]));
+
+/* ---------- Stockage ---------- */
+const LS = {
+  get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},
+  set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
+};
+function loadRates(){const saved=LS.get("sc_rates",null);if(saved)RARITIES.forEach(r=>{if(typeof saved[r.id]==="number")r.rate=saved[r.id]})}
+loadRates();
+const settings = Object.assign({key:"",model:"gpt-image-1",quality:"low"}, LS.get("sc_settings",{}));
+
+let dbp=null;
+function db(){
+  if(!dbp) dbp=new Promise((res,rej)=>{
+    const rq=indexedDB.open("scancartes",1);
+    rq.onupgradeneeded=()=>rq.result.createObjectStore("cards",{keyPath:"id",autoIncrement:true});
+    rq.onsuccess=()=>res(rq.result); rq.onerror=()=>rej(rq.error);
+  });
+  return dbp;
+}
+async function tx(mode,fn){
+  const d=await db();
+  return new Promise((res,rej)=>{
+    const t=d.transaction("cards",mode),s=t.objectStore("cards");
+    const rq=fn(s); t.oncomplete=()=>res(rq&&rq.result); t.onerror=()=>rej(t.error);
+  });
+}
+const putCard=c=>tx("readwrite",s=>s.put(c));
+const delCard=id=>tx("readwrite",s=>s.delete(id));
+const allCards=()=>tx("readonly",s=>s.getAll()).then(a=>a||[]).catch(()=>[]);
+
+/* ---------- Utilitaires ---------- */
+const $=s=>document.querySelector(s);
+function el(tag,attrs={},...kids){
+  const e=document.createElement(tag);
+  for(const[k,v]of Object.entries(attrs)){
+    if(k==="class")e.className=v;else if(k.startsWith("on"))e.addEventListener(k.slice(2),v);else if(v!=null)e.setAttribute(k,v);
+  }
+  for(const k of kids.flat()){if(k==null)continue;e.append(k.nodeType?k:document.createTextNode(String(k)))}
+  return e;
+}
+function initials(name){return (name||"?").split(/\s+/).filter(Boolean).slice(0,2).map(w=>w[0]).join("").toUpperCase()}
+function roll(){
+  const total=RARITIES.reduce((a,r)=>a+Math.max(0,r.rate),0)||1;
+  let x=Math.random()*total;
+  for(const r of RARITIES){x-=Math.max(0,r.rate);if(x<0)return r.id}
+  return RARITIES[0].id;
+}
+function pct(r){const t=RARITIES.reduce((a,x)=>a+Math.max(0,x.rate),0)||1;return Math.round(Math.max(0,r.rate)/t*1000)/10}
+
+/* ---------- Carte ---------- */
+function cardEl(c,{example=false,loading=false,msg=""}={}){
+  const r=RAR[c.rarity]||RARITIES[0];
+  const art=el("div",{class:"c-art"+(loading?" loading":"")});
+  if(c.image&&!loading) art.append(el("img",{src:c.image,alt:"Illustration de "+c.name}));
+  else art.append(el("div",{class:"ph"+(msg?" small":"")},msg||initials(c.name)));
+  return el("div",{class:"card r-"+r.id},
+    example?el("span",{class:"badge-ex"},"Exemple"):null,
+    el("div",{class:"card-in"},
+      el("div",{class:"c-top"},el("span",{class:"c-name"},c.name),el("span",{class:"c-gems","aria-label":r.gems+" sur 5"},Array.from({length:r.gems},()=>el("i")))),
+      art,
+      el("div",{class:"c-bot"},el("span",{class:"c-brand"},c.brand||"Sans marque"),el("span",{class:"c-rar"},r.label)),
+      el("div",{class:"c-code"},el("span",{},c.code),el("span",{},"N° "+String(c.serial||0).padStart(3,"0")))
+    )
+  );
+}
+
+/* ---------- Recherche produit ---------- */
+const SOURCES=[
+  ["Open Food Facts","https://world.openfoodfacts.org"],
+  ["Open Beauty Facts","https://world.openbeautyfacts.org"],
+  ["Open Products Facts","https://world.openproductsfacts.org"]
+];
+async function lookup(code){
+  for(const[name,base]of SOURCES){
+    try{
+      const r=await fetch(`${base}/api/v2/product/${code}.json?fields=product_name,product_name_fr,generic_name_fr,brands,categories,image_front_url`);
+      if(!r.ok)continue;
+      const j=await r.json();
+      if(j.status!==1||!j.product)continue;
+      const p=j.product;
+      const pname=(p.product_name_fr||p.product_name||p.generic_name_fr||"").trim();
+      if(!pname)continue;
+      return {name:pname,brand:(p.brands||"").split(",")[0].trim(),category:(p.categories||"").split(",").map(s=>s.trim()).filter(Boolean).slice(-1)[0]||"",source:name,productImage:p.image_front_url||""};
+    }catch(e){}
+  }
+  return null;
+}
+
+/* ---------- Génération d'image ---------- */
+function buildPrompt(c){
+  const r=RAR[c.rarity];
+  return `Collectible trading card artwork featuring the product "${c.name}"`+
+    (c.brand?` by ${c.brand}`:"")+(c.category?` (${c.category})`:"")+
+    `. The product is the hero of the image, centered and clearly recognizable. Style: ${r.style}. `+
+    `Square composition, no text, no letters, no logos, no card border or frame.`;
+}
+async function generateImage(c){
+  if(!settings.key) throw new Error("Ajoute ta clé OpenAI dans Réglages pour générer l'illustration.");
+  const model=(settings.model||"gpt-image-1").trim();
+  const body={model,prompt:buildPrompt(c),n:1,size:"1024x1024"};
+  if(model.startsWith("dall-e")){body.response_format="b64_json";body.quality=settings.quality==="high"?"hd":"standard"}
+  else body.quality=settings.quality||"low";
+  let r;
+  try{
+    r=await fetch("https://api.openai.com/v1/images/generations",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+settings.key},body:JSON.stringify(body)});
+  }catch(e){throw new Error("Impossible de joindre OpenAI. Vérifie ta connexion.")}
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok){
+    const m=j.error&&j.error.message||("Erreur "+r.status);
+    if(r.status===401)throw new Error("Clé OpenAI refusée. Vérifie-la dans Réglages.");
+    throw new Error("OpenAI : "+m);
+  }
+  const b64=j.data&&j.data[0]&&j.data[0].b64_json;
+  if(!b64)throw new Error("OpenAI n'a pas renvoyé d'image.");
+  return compress("data:image/png;base64,"+b64);
+}
+function compress(src,size=640){
+  return new Promise(res=>{
+    const img=new Image();
+    img.onload=()=>{const cv=document.createElement("canvas");cv.width=cv.height=size;cv.getContext("2d").drawImage(img,0,0,size,size);res(cv.toDataURL("image/jpeg",.86))};
+    img.onerror=()=>res(src);
+    img.src=src;
+  });
+}
+
+/* ---------- Export PNG ---------- */
+function loadImg(src){return new Promise(res=>{if(!src)return res(null);const i=new Image();i.onload=()=>res(i);i.onerror=()=>res(null);i.src=src})}
+function rr(ctx,x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath()}
+async function exportCard(c){
+  await document.fonts.ready;
+  const r=RAR[c.rarity],W=630,H=880,cv=document.createElement("canvas");cv.width=W;cv.height=H;
+  const ctx=cv.getContext("2d");
+  const g=ctx.createLinearGradient(0,0,W,H);g.addColorStop(0,r.c[0]);g.addColorStop(.55,r.c[1]);g.addColorStop(1,r.c[0]);
+  ctx.fillStyle=g;rr(ctx,0,0,W,H,28);ctx.fill();
+  ctx.fillStyle="rgba(255,255,255,.4)";rr(ctx,20,20,W-40,H-40,20);ctx.fill();
+  ctx.fillStyle=r.ink;ctx.font="700 38px Rowdies, Arial Black, sans-serif";ctx.textBaseline="top";
+  let name=c.name;while(ctx.measureText(name).width>W-230&&name.length>3)name=name.slice(0,-2);
+  if(name!==c.name)name=name.trim()+"…";
+  ctx.fillText(name,44,48);
+  for(let i=0;i<r.gems;i++){const x=W-60-i*30,y=66;ctx.save();ctx.translate(x,y);ctx.rotate(Math.PI/4);ctx.fillStyle=r.ink;ctx.fillRect(-12,-12,24,24);ctx.fillStyle=r.c[0];ctx.fillRect(-8,-8,16,16);ctx.restore()}
+  const ax=44,ay=110,aw=W-88,ah=600;
+  ctx.fillStyle=r.ink;rr(ctx,ax-6,ay-6,aw+12,ah+12,16);ctx.fill();
+  const img=await loadImg(c.image);
+  ctx.save();rr(ctx,ax,ay,aw,ah,12);ctx.clip();
+  if(img){const s=Math.max(aw/img.width,ah/img.height),w=img.width*s,h=img.height*s;ctx.drawImage(img,ax+(aw-w)/2,ay+(ah-h)/2,w,h)}
+  else{ctx.fillStyle=r.c[1];ctx.fillRect(ax,ay,aw,ah)}
+  ctx.restore();
+  ctx.fillStyle=r.ink;ctx.font="600 26px Outfit, sans-serif";ctx.fillText((c.brand||"Sans marque").slice(0,26),44,742);
+  ctx.font="700 22px Rowdies, sans-serif";ctx.textAlign="right";ctx.fillText(r.label.toUpperCase(),W-44,746);
+  ctx.font="500 20px 'JetBrains Mono', monospace";ctx.globalAlpha=.8;ctx.fillText("N° "+String(c.serial||0).padStart(3,"0"),W-44,800);
+  ctx.textAlign="left";ctx.fillText(c.code,44,800);
+  return new Promise(res=>cv.toBlob(b=>{
+    const a=document.createElement("a");a.href=URL.createObjectURL(b);
+    a.download=`carte-${c.code}-${r.id}.png`;document.body.append(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),4000);res();
+  },"image/png"));
+}
+
+/* ---------- Overlay ---------- */
+const ov=$("#overlay");
+function closeOverlay(){ov.hidden=true;ov.replaceChildren()}
+ov.addEventListener("click",e=>{if(e.target===ov&&!ov.dataset.lock)closeOverlay()});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!ov.hidden&&!ov.dataset.lock)closeOverlay()});
+
+async function nextSerial(){const a=await allCards();return a.reduce((m,c)=>Math.max(m,c.serial||0),0)+1}
+
+/* Tirage complet après un scan */
+async function draw(code){
+  const status=$("#status");
+  code=String(code).replace(/\D/g,"");
+  if(![8,12,13,14].includes(code.length)){status.className="status err";status.textContent="Code invalide : il faut 8, 12, 13 ou 14 chiffres.";return}
+  status.className="status";status.textContent="Recherche du produit "+code+"…";
+  const p=await lookup(code);
+  if(!p){status.className="status err";status.textContent="Produit introuvable pour "+code+" dans Open Food, Beauty et Products Facts.";return}
+  status.textContent="";
+  const card={code,...p,rarity:roll(),serial:await nextSerial(),createdAt:Date.now(),image:null};
+  try{card.id=await putCard(card)}catch(e){}
+  showReveal(card);
+}
+
+function showReveal(card){
+  const r=RAR[card.rarity];
+  ov.dataset.lock="1";ov.hidden=false;
+  const flip=el("div",{class:"flip"},el("div",{class:"flip-inner"},
+    el("div",{class:"face back"},el("span",{},"ScanCartes")),
+    el("div",{class:"face front"},cardEl(card,{loading:true}))));
+  const title=el("div",{class:"ov-title"},"Tirage…");
+  const msg=el("p",{class:"ov-msg"},card.source);
+  const actions=el("div",{class:"ov-actions"});
+  ov.replaceChildren(el("div",{class:"ov-body"},title,flip,msg,actions));
+  setTimeout(()=>{
+    flip.classList.add("shown");
+    if(["rare","epique","legendaire"].includes(r.id))flip.classList.add("glow-"+r.id);
+    title.textContent=r.label+" !";
+    msg.textContent="Génération de l'illustration…";
+    runGeneration(card,flip,msg,actions);
+  },700);
+}
+
+async function runGeneration(card,flip,msg,actions){
+  const front=flip.querySelector(".front");
+  actions.replaceChildren();
+  front.replaceChildren(cardEl(card,{loading:true}));
+  msg.className="ov-msg";msg.textContent="Génération de l'illustration…";
+  try{
+    card.image=await generateImage(card);
+    try{await putCard(card)}catch(e){}
+    front.replaceChildren(cardEl(card));
+    msg.textContent="Ajoutée à ta collection.";
+  }catch(e){
+    front.replaceChildren(cardEl(card,{msg:"Illustration à générer"}));
+    msg.className="ov-msg err";msg.textContent=e.message+" La carte est gardée dans ta collection.";
+    if(settings.key)actions.append(el("button",{onclick:()=>runGeneration(card,flip,msg,actions)},"Réessayer"));
+  }
+  delete ov.dataset.lock;
+  actions.append(
+    el("button",{class:"primary",onclick:()=>{closeOverlay();startCam()}},"Scanner un autre"),
+    el("button",{onclick:()=>{closeOverlay();showTab("col")}},"Collection")
+  );
+}
+
+function showDetail(card){
+  ov.hidden=false;delete ov.dataset.lock;
+  const holder=el("div",{style:"width:min(78vw,300px)"},cardEl(card));
+  const msg=el("p",{class:"ov-msg"},(card.category?card.category+" · ":"")+(card.source||""));
+  const actions=el("div",{class:"ov-actions"});
+  const render=()=>{
+    actions.replaceChildren(
+      el("button",{class:"primary",onclick:()=>exportCard(card)},"Télécharger"),
+      el("button",{onclick:regen,disabled:settings.key?null:"true"},card.image?"Régénérer l'image":"Générer l'image"),
+      el("button",{class:"danger",onclick:askDelete},"Supprimer"),
+      el("button",{onclick:closeOverlay},"Fermer")
+    );
+  };
+  async function regen(){
+    ov.dataset.lock="1";actions.replaceChildren();
+    holder.replaceChildren(cardEl(card,{loading:true}));msg.className="ov-msg";msg.textContent="Génération de l'illustration…";
+    try{card.image=await generateImage(card);await putCard(card);msg.textContent="Nouvelle illustration enregistrée.";renderGrid()}
+    catch(e){msg.className="ov-msg err";msg.textContent=e.message}
+    holder.replaceChildren(cardEl(card,card.image?{}:{msg:"Illustration à générer"}));
+    delete ov.dataset.lock;render();
+  }
+  function askDelete(){
+    actions.replaceChildren(el("div",{class:"confirm"},
+      el("span",{},"Supprimer définitivement cette carte ?"),
+      el("div",{class:"row"},
+        el("button",{class:"danger",onclick:async()=>{await delCard(card.id);closeOverlay();renderGrid()}},"Oui, supprimer"),
+        el("button",{onclick:render},"Annuler"))));
+  }
+  render();
+  ov.replaceChildren(el("div",{class:"ov-body"},holder,msg,actions));
+}
+
+/* ---------- Collection ---------- */
+const EXAMPLES=[
+  {name:"Pâte à tartiner noisettes",brand:"Marque exemple",code:"3017620422003",rarity:"legendaire",serial:1},
+  {name:"Eau minérale naturelle",brand:"Marque exemple",code:"3274080005003",rarity:"rare",serial:2},
+  {name:"Biscuits au beurre",brand:"Marque exemple",code:"3017760000109",rarity:"commune",serial:3}
+];
+async function renderGrid(){
+  const cards=(await allCards()).sort((a,b)=>b.createdAt-a.createdAt);
+  const grid=$("#grid"),chips=$("#col-chips");
+  chips.replaceChildren(...RARITIES.map(r=>el("span",{class:"chip r-"+r.id},el("i"),r.label+" ",el("b",{class:"mono"},cards.filter(c=>c.rarity===r.id).length))));
+  if(!cards.length){
+    $("#col-count").textContent="Aucune carte pour l'instant. Voici à quoi elles ressembleront.";
+    grid.replaceChildren(...EXAMPLES.map(c=>cardEl(c,{example:true})));
+    return;
+  }
+  $("#col-count").textContent=cards.length+(cards.length>1?" cartes":" carte");
+  grid.replaceChildren(...cards.map(c=>el("button",{class:"cardbtn","aria-label":c.name+", "+RAR[c.rarity].label,onclick:()=>showDetail(c)},cardEl(c,c.image?{}:{msg:"Illustration à générer"}))));
+}
+
+/* ---------- Caméra ---------- */
+let reader=null,scanning=false;
+async function startCam(){
+  showTab("scan");
+  const status=$("#status");
+  if(!window.ZXing){status.className="status err";status.textContent="Le lecteur de code-barres n'a pas pu se charger. Vérifie ta connexion.";return}
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){status.className="status err";status.textContent="Caméra indisponible : ouvre l'app via une adresse https.";return}
+  const hints=new Map();
+  const F=ZXing.BarcodeFormat;
+  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E]);
+  reader=new ZXing.BrowserMultiFormatReader(hints);
+  const video=$("#video");
+  video.hidden=false;$("#reticle").hidden=false;$("#idle").hidden=true;$("#cam-ctrl").hidden=false;
+  status.className="status";status.textContent="Vise le code-barres.";
+  scanning=true;
+  try{
+    await reader.decodeFromConstraints({video:{facingMode:"environment"}},video,(res)=>{
+      if(res&&scanning){scanning=false;if(navigator.vibrate)navigator.vibrate(60);stopCam();draw(res.getText())}
+    });
+  }catch(e){
+    stopCam();status.className="status err";
+    status.textContent=e&&e.name==="NotAllowedError"?"Accès à la caméra refusé. Autorise-le dans les réglages du navigateur.":"Impossible d'ouvrir la caméra.";
+  }
+}
+function stopCam(){
+  scanning=false;
+  try{reader&&reader.reset()}catch(e){}
+  $("#video").hidden=true;$("#reticle").hidden=true;$("#idle").hidden=false;$("#cam-ctrl").hidden=true;
+}
+$("#btn-cam").addEventListener("click",startCam);
+$("#btn-stop").addEventListener("click",()=>{stopCam();$("#status").textContent=""});
+$("#manual").addEventListener("submit",e=>{e.preventDefault();stopCam();draw($("#code-input").value)});
+
+/* ---------- Onglets ---------- */
+function showTab(t){
+  for(const b of document.querySelectorAll("nav.tabs button"))b.setAttribute("aria-selected",b.dataset.tab===t);
+  for(const s of["scan","col","set"])$("#tab-"+s).hidden=s!==t;
+  if(t!=="scan"&&scanning)stopCam();
+  if(t==="col")renderGrid();
+  window.scrollTo(0,0);
+}
+document.querySelectorAll("nav.tabs button").forEach(b=>b.addEventListener("click",()=>showTab(b.dataset.tab)));
+
+/* ---------- Réglages ---------- */
+function renderRates(){
+  $("#rate-chips").replaceChildren(...RARITIES.map(r=>el("span",{class:"chip r-"+r.id},el("i"),r.label+" ",el("b",{class:"mono"},pct(r)+" %"))));
+  $("#rates").replaceChildren(...RARITIES.flatMap(r=>[
+    el("span",{class:"r-"+r.id},el("i"),r.label),
+    el("input",{id:"rate-"+r.id,type:"number",min:"0",step:"0.1",value:r.rate,class:"mono","aria-label":"Taux "+r.label})
+  ]));
+}
+$("#set-key").value=settings.key;$("#set-model").value=settings.model;$("#set-quality").value=settings.quality;
+$("#btn-save-set").addEventListener("click",()=>{
+  settings.key=$("#set-key").value.trim();settings.model=$("#set-model").value.trim()||"gpt-image-1";settings.quality=$("#set-quality").value;
+  LS.set("sc_settings",settings);$("#set-status").textContent="Réglages enregistrés.";
+});
+$("#btn-save-rates").addEventListener("click",()=>{
+  const o={};RARITIES.forEach(r=>{const v=parseFloat($("#rate-"+r.id).value);r.rate=isNaN(v)?0:Math.max(0,v);o[r.id]=r.rate});
+  LS.set("sc_rates",o);renderRates();$("#set-status").textContent="";
+});
+renderRates();
+</script>
+
+</body>
+</html>
