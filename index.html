@@ -451,7 +451,7 @@ function buildPrompt(c){
   const r=RAR[c.rarity]||RARITIES[0];
   return `Collectible trading card artwork featuring the product "${c.name}"`+
     (c.brand?` by ${c.brand}`:"")+(c.category?` (${c.category})`:"")+
-    `. The product is the hero of the image, centered and clearly recognizable. Style: ${GLOBAL?SHARED_STYLE:r.style}. `+
+    `. The product is the hero of the image, centered and clearly recognizable. Style: ${r.style}. `+
     `Square composition, no text, no letters, no logos, no card border or frame.`;
 }
 /* Pollinations, accès sans clé : une image à la fois, ~45 s entre deux images */
@@ -545,39 +545,42 @@ async function nextSerial(){const a=await allCards();return a.reduce((m,c)=>Math
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
 /* ---------- Registre mondial (Firebase Firestore, API REST) ----------
-   Règle : le premier joueur qui scanne un produit fixe sa carte (nom, rareté, image).
-   Tous ceux qui scannent ensuite le même code reçoivent exactement cette carte.
-   La création du document est atomique : si deux joueurs scannent en même temps,
-   un seul obtient le droit de générer. */
+   Chaque joueur a sa propre app et sa propre collection ; la base est commune.
+   products/{code}          fiche du produit (nom, marque…), écrite une seule fois
+   images/{code}-{rareté}   illustration de ce produit dans cette rareté : générée par le
+                            premier joueur qui obtient cette rareté, puis figée pour tous.
+   Les créations sont atomiques : en cas de tirages simultanés, un seul joueur génère. */
 const CFG=window.SCANCARTES_CONFIG||{};
 const GLOBAL=!!(CFG.firebaseApiKey&&CFG.firebaseProjectId);
-const FS=GLOBAL?`https://firestore.googleapis.com/v1/projects/${encodeURIComponent(CFG.firebaseProjectId)}/databases/(default)/documents/cards`:"";
+const FSB=GLOBAL?`https://firestore.googleapis.com/v1/projects/${encodeURIComponent(CFG.firebaseProjectId)}/databases/(default)/documents`:"";
 const STALE=3*60*1000; // une génération bloquée plus de 3 min peut être reprise par un autre joueur
 
 function toFields(o){const f={};for(const[k,v]of Object.entries(o)){if(v==null)continue;f[k]=typeof v==="number"?{integerValue:String(Math.round(v))}:{stringValue:String(v)}}return{fields:f}}
 function fromDoc(d){const o={};for(const[k,v]of Object.entries(d.fields||{}))o[k]=v.stringValue!==undefined?v.stringValue:(v.integerValue!==undefined?Number(v.integerValue):null);o._updateTime=d.updateTime;return o}
-async function gGet(code){
-  const r=await fetch(`${FS}/${code}?key=${CFG.firebaseApiKey}`,{cache:"no-store"});
+async function gGet(path){
+  const r=await fetch(`${FSB}/${path}?key=${CFG.firebaseApiKey}`,{cache:"no-store"});
   if(r.status===404)return null;
   if(!r.ok)throw new Error("Registre mondial injoignable ("+r.status+").");
   return fromDoc(await r.json());
 }
-async function gCreate(code,data){
-  const r=await fetch(`${FS}?documentId=${code}&key=${CFG.firebaseApiKey}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(toFields(data))});
+async function gCreate(col,id,data){
+  const r=await fetch(`${FSB}/${col}?documentId=${encodeURIComponent(id)}&key=${CFG.firebaseApiKey}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(toFields(data))});
   if(r.status===409)return false;
+  if(r.status===403)throw new Error("Registre mondial : écriture refusée. Les règles Firestore ne sont pas à jour.");
   if(!r.ok)throw new Error("Registre mondial : création refusée ("+r.status+").");
   return true;
 }
-async function gPatch(code,data,updateTime){
+async function gPatch(path,data,updateTime){
   const mask=Object.keys(data).map(k=>"updateMask.fieldPaths="+k).join("&");
   const pre=updateTime?"currentDocument.updateTime="+encodeURIComponent(updateTime):"currentDocument.exists=true";
-  const r=await fetch(`${FS}/${code}?${mask}&${pre}&key=${CFG.firebaseApiKey}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(toFields(data))});
+  const r=await fetch(`${FSB}/${path}?${mask}&${pre}&key=${CFG.firebaseApiKey}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(toFields(data))});
   if(r.ok)return true;
   if([400,403,409,412].includes(r.status))return false; // déjà remplie par un autre joueur, ou précondition
   throw new Error("Registre mondial injoignable ("+r.status+").");
 }
+const imgId=c=>c.code+"-"+c.rarity;
 
-/* ---------- Collection locale : une entrée par produit, avec le nombre d'exemplaires ---------- */
+/* ---------- Collection locale : une entrée par produit et par rareté, avec compteur ---------- */
 async function addToCollection(c){
   const all=await allCards(),ex=all.find(x=>x.code===c.code&&x.rarity===c.rarity);
   if(ex){
@@ -590,91 +593,115 @@ async function addToCollection(c){
   try{card.id=await putCard(card)}catch(e){}
   return card;
 }
-
-async function shareImageLocally(code,image){
-  for(const c of await allCards()){if(c.code===code&&c.image!==image){c.image=image;try{await putCard(c)}catch(e){}}}
+async function shareImageLocally(code,rarity,image){
+  for(const c of await allCards()){if(c.code===code&&c.rarity===rarity&&c.image!==image){c.image=image;try{await putCard(c)}catch(e){}}}
 }
-/* Obtenir l'image officielle d'une carte : la lire, la générer si c'est notre tour, ou attendre */
+
+/* Obtenir l'illustration officielle d'un produit dans une rareté :
+   la lire, la générer si c'est notre tour, ou attendre le joueur qui la génère */
 function waitMsg(onMsg){return t=>onMsg(t>0?"Générateur gratuit : prochaine image dans "+t+" s…":"Génération de l'illustration…")}
 async function obtainImage(card,onMsg){
   if(!GLOBAL)return generateImage(card,waitMsg(onMsg));
+  const path="images/"+imgId(card);
   for(;;){
-    const g=await gGet(card.code);
-    if(!g)throw new Error("Cette carte n'est plus dans le registre mondial.");
+    let g=await gGet(path);
+    if(!g){ // pas encore d'illustration pour cette rareté : on la réserve
+      const now=Date.now();
+      if(await gCreate("images",imgId(card),{code:card.code,rarity:card.rarity,status:"pending",createdAt:now,claimedAt:now}))card.claimedAt=now;
+      continue;
+    }
     if(g.status==="ready"&&g.image)return g.image;
     const mine=!!card.claimedAt&&g.claimedAt===card.claimedAt;
     const stale=Date.now()-(g.claimedAt||0)>STALE;
     if(mine||stale){
       if(!mine){
         const now=Date.now();
-        if(!(await gPatch(card.code,{claimedAt:now},g._updateTime)))continue;
+        if(!(await gPatch(path,{claimedAt:now},g._updateTime)))continue;
         card.claimedAt=now;
       }
       onMsg("Génération de l'illustration…");
       const img=await generateImage(card,waitMsg(onMsg));
-      if(await gPatch(card.code,{image:img,status:"ready"}))return img;
+      if(await gPatch(path,{image:img,status:"ready"}))return img;
       continue; // un autre joueur a terminé avant : on relit sa version
     }
-    onMsg("Un autre joueur est en train de générer cette carte… ("+Math.round((Date.now()-g.claimedAt)/1000)+" s)");
+    onMsg("Un autre joueur génère l'illustration "+(RAR[card.rarity]||RARITIES[0]).label+" de ce produit… ("+Math.round((Date.now()-g.claimedAt)/1000)+" s)");
     await sleep(4000);
   }
 }
 
 /* ---------- Scan → carte ---------- */
 let drawing=false;
+function scanErr(m){const s=$("#status");s.className="status err";s.textContent=m}
 async function draw(code){
   if(drawing)return;
   const status=$("#status");
   code=String(code).replace(/\D/g,"");
-  if(![8,12,13,14].includes(code.length)){status.className="status err";status.textContent="Code invalide : il faut 8, 12, 13 ou 14 chiffres.";return}
+  if(![8,12,13,14].includes(code.length))return scanErr("Code invalide : il faut 8, 12, 13 ou 14 chiffres.");
   $("#unknown").hidden=true;
   drawing=true;
   try{
-    // 1. La carte existe déjà ?
+    // 1. Produit déjà connu ?
     status.className="status";
+    let prod=null;
     if(GLOBAL){
       status.textContent="Recherche dans le registre mondial…";
-      let g;
-      try{g=await gGet(code)}catch(e){status.className="status err";status.textContent=e.message+" Réessaie quand tu as du réseau.";return}
-      if(g){status.textContent="";return revealExisting(code,g)}
+      try{prod=await gGet("products/"+code)}catch(e){return scanErr(e.message+" Réessaie quand tu as du réseau.")}
     }else{
-      const mine=(await allCards()).find(c=>c.code===code);
-      if(mine){status.textContent="";return revealExisting(code,mine)}
+      prod=(await allCards()).find(c=>c.code===code)||null;
     }
-    // 2. Produit jamais scanné : on cherche ce que c'est
+    if(prod){status.textContent="";return await finish(code,prod,false)}
+    // 2. Jamais scanné : on cherche ce que c'est
     status.textContent="Recherche du produit "+code+"…";
     let p=null,searching=true;
     try{p=await lookup(code,(d,n)=>{if(searching)status.textContent="Recherche du produit "+code+"… ("+d+"/"+n+" bases)"})}finally{searching=false}
     if(!p){
-      status.className="status err";status.textContent="Introuvable dans "+SOURCES.filter(s=>!s.only||s.only(code)).map(s=>s.label).join(", ")+".";
+      scanErr("Introuvable dans "+SOURCES.filter(s=>!s.only||s.only(code)).map(s=>s.label).join(", ")+".");
       $("#unknown-code").textContent=code;$("#unknown").dataset.code=code;$("#unknown").hidden=false;$("#unknown-name").value="";$("#unknown-brand").value="";
       $("#unknown-name").focus();
       return;
     }
     status.textContent="";
-    await discover(code,p);
+    await registerProduct(code,p);
   }finally{drawing=false}
 }
 
-/* Premier scan au monde : on réserve la carte, on tire la rareté, on génère */
-async function discover(code,p){
-  const now=Date.now(),rarity=roll();
-  const base={code,name:p.name,brand:p.brand||"",category:p.category||"",source:p.source||""};
+/* Premier scan au monde : on enregistre la fiche du produit */
+async function registerProduct(code,p){
+  const info={code,name:p.name,brand:p.brand||"",category:p.category||"",source:p.source||""};
+  let first=true;
   if(GLOBAL){
     let ok;
-    try{ok=await gCreate(code,{...base,rarity,status:"pending",createdAt:now,claimedAt:now})}
-    catch(e){const s=$("#status");s.className="status err";s.textContent=e.message;return}
-    if(!ok){const g=await gGet(code);return revealExisting(code,g)} // quelqu'un vient de le scanner juste avant
+    try{ok=await gCreate("products",code,{...info,createdAt:Date.now()})}catch(e){return scanErr(e.message)}
+    if(!ok){ // un autre joueur vient de l'enregistrer : on prend sa fiche
+      first=false;
+      const g=await gGet("products/"+code);
+      if(g)Object.assign(info,{name:g.name,brand:g.brand||"",category:g.category||"",source:g.source||""});
+    }
   }
-  const card=await addToCollection({...base,rarity,image:null,claimedAt:now,discoverer:true});
-  card.claimedAt=now;
-  showReveal(card,{first:true});
+  return finish(code,info,first);
 }
-async function revealExisting(code,g){
-  const known=(await allCards()).find(c=>c.code===code&&c.image);
-  const image=GLOBAL?(g.image||null):(g.image||(known&&known.image)||null);
-  const card=await addToCollection({code,name:g.name,brand:g.brand||"",category:g.category||"",source:g.source||"",rarity:roll(),image});
-  showReveal(card,{first:false});
+
+/* Tirage de la rareté, puis illustration de ce produit dans cette rareté */
+async function finish(code,info,firstProduct){
+  const rarity=roll(),now=Date.now();
+  let image=null,claimedAt=null,firstRarity=false;
+  if(GLOBAL){
+    const id=code+"-"+rarity;
+    try{
+      let g=await gGet("images/"+id);
+      if(!g){
+        if(await gCreate("images",id,{code,rarity,status:"pending",createdAt:now,claimedAt:now})){claimedAt=now;firstRarity=true}
+        else g=await gGet("images/"+id);
+      }
+      if(g&&g.status==="ready")image=g.image||null;
+    }catch(e){return scanErr(e.message)}
+  }else{
+    const mine=(await allCards()).filter(c=>c.code===code&&c.rarity===rarity);
+    const k=mine.find(c=>c.image);image=k?k.image:null;firstRarity=!mine.length;
+  }
+  const card=await addToCollection({code,name:info.name,brand:info.brand||"",category:info.category||"",source:info.source||"",rarity,image,discoverer:firstProduct||undefined});
+  if(claimedAt)card.claimedAt=claimedAt;
+  showReveal(card,{firstProduct,firstRarity});
 }
 
 $("#unknown").addEventListener("submit",async e=>{
@@ -682,11 +709,11 @@ $("#unknown").addEventListener("submit",async e=>{
   const name=clean($("#unknown-name").value);if(!name||drawing)return;
   $("#unknown").hidden=true;$("#status").textContent="";
   drawing=true;
-  try{await discover($("#unknown").dataset.code,{name,brand:clean($("#unknown-brand").value),category:"",source:"Saisie manuelle"})}finally{drawing=false}
+  try{await registerProduct($("#unknown").dataset.code,{name,brand:clean($("#unknown-brand").value),category:"",source:"Saisie manuelle"})}finally{drawing=false}
 });
 $("#unknown-cancel").addEventListener("click",()=>{$("#unknown").hidden=true;$("#status").textContent=""});
 
-function showReveal(card,{first}){
+function showReveal(card,{firstProduct,firstRarity}){
   const r=RAR[card.rarity]||RARITIES[0];
   ov.hidden=false;delete ov.dataset.lock;
   const flip=el("div",{class:"flip"},el("div",{class:"flip-inner"},
@@ -699,12 +726,16 @@ function showReveal(card,{first}){
   setTimeout(()=>{
     flip.classList.add("shown");
     if(["rare","epique","legendaire"].includes(r.id))flip.classList.add("glow-"+r.id);
-    if(first){
+    const lbl=r.label.toLowerCase(),who=GLOBAL?"de tous les joueurs":"de ta collection";
+    if(firstProduct){
       title.textContent="Première découverte ! "+r.label;
-      msg.textContent=GLOBAL?"Personne n'avait encore scanné ce produit : ton illustration devient celle de tous les joueurs.":"Nouvelle carte.";
+      msg.textContent=GLOBAL?"Personne n'avait encore scanné ce produit : ton illustration "+lbl+" devient celle "+who+".":"Nouvelle carte.";
+    }else if(firstRarity){
+      title.textContent=r.label+" inédite !";
+      msg.textContent=GLOBAL?"Premier tirage "+lbl+" de ce produit au monde : ton illustration devient celle "+who+".":"Première fois que tu obtiens ce produit en "+lbl+".";
     }else{
       title.textContent=r.label+((card.copies||1)>1?" · ×"+card.copies:"");
-      msg.textContent=GLOBAL?"Illustration créée par le premier joueur à l'avoir scanné. La rareté, elle, est tirée pour toi.":"Nouveau tirage pour un produit déjà scanné.";
+      msg.textContent=GLOBAL?"Illustration "+lbl+" créée par le premier joueur à l'avoir obtenue.":"Déjà obtenue dans cette rareté.";
     }
     actions.replaceChildren(
       el("button",{class:"primary",onclick:()=>{closeOverlay();startCam()}},"Scanner un autre"),
@@ -721,7 +752,7 @@ async function runGeneration(card,flip,msg,actions){
   try{
     card.image=await obtainImage(card,t=>{msg.textContent=t});
     try{await putCard(card)}catch(e){}
-    await shareImageLocally(card.code,card.image);
+    await shareImageLocally(card.code,card.rarity,card.image);
     front.replaceChildren(cardEl(card));
     msg.textContent="Ajoutée à ta collection.";
   }catch(e){
@@ -748,7 +779,7 @@ function showDetail(card){
   async function regen(){
     actions.replaceChildren();
     holder.replaceChildren(cardEl(card,{loading:true}));msg.className="ov-msg";msg.textContent="Génération de l'illustration…";
-    try{card.image=GLOBAL?await obtainImage(card,t=>{msg.textContent=t}):await generateImage(card,waitMsg(t=>{msg.textContent=t}));await putCard(card);await shareImageLocally(card.code,card.image);msg.textContent="Illustration enregistrée.";renderGrid()}
+    try{card.image=GLOBAL?await obtainImage(card,t=>{msg.textContent=t}):await generateImage(card,waitMsg(t=>{msg.textContent=t}));await putCard(card);await shareImageLocally(card.code,card.rarity,card.image);msg.textContent="Illustration enregistrée.";renderGrid()}
     catch(e){msg.className="ov-msg err";msg.textContent=e.message}
     holder.replaceChildren(cardEl(card,card.image?{}:{msg:"Illustration à générer"}));
     render();
@@ -1056,7 +1087,7 @@ $("#btn-save-rates").addEventListener("click",()=>{
 renderRates();
 
 /* ---------- Version & mises à jour ---------- */
-const APP_VERSION="1.5.0";
+const APP_VERSION="1.6.0";
 function cmpVer(a,b){const x=a.split(".").map(Number),y=b.split(".").map(Number);for(let i=0;i<3;i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)-(y[i]||0)}return 0}
 async function checkUpdate(manual){
   const st=$("#update-status");
@@ -1077,7 +1108,7 @@ function applyUpdate(v){location.replace(location.pathname+"?v="+encodeURICompon
 $("#app-version").textContent="v"+APP_VERSION;
 $("#ver-badge").textContent="v"+APP_VERSION;
 $("#net-state").classList.toggle("on",GLOBAL);
-$("#net-state span").textContent=GLOBAL?"Registre mondial connecté : une seule illustration par produit pour tous les joueurs.":"Registre mondial non configuré : les cartes restent sur ce téléphone.";
+$("#net-state span").textContent=GLOBAL?"Registre mondial connecté : une illustration par produit et par rareté, commune à tous les joueurs.":"Registre mondial non configuré : les cartes restent sur ce téléphone.";
 let latest=null,toastT=0;
 function toast(msg){const t=$("#toast");t.textContent=msg;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>t.hidden=true,2600)}
 $("#btn-check-update").addEventListener("click",()=>checkUpdate(true));
