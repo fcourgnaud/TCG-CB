@@ -3,6 +3,6 @@
    (le premier joueur qui scanne un produit fixe sa carte pour tout le monde).
    Laisser vide = mode local, les cartes restent sur le téléphone. */
 window.SCANCARTES_CONFIG = {
-  firebaseApiKey: "",
-  firebaseProjectId: ""
+  firebaseApiKey: "AIzaSyCrpe4ybpE9BKmlo52XIrlSmDFGMRvcj5M",
+  firebaseProjectId: "tcg-cb"
 };
