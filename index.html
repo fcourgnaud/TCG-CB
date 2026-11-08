@@ -67,6 +67,8 @@ label{display:flex;flex-direction:column;gap:6px;font-weight:500}
 .reticle.hit{border-color:#5be38a;box-shadow:0 0 0 999px rgba(0,0,0,.35),0 0 24px #5be38a}
 .engine{position:absolute;top:8px;right:10px;font:500 .7rem var(--f-mono);color:var(--muted);background:rgba(0,0,0,.45);padding:2px 6px;border-radius:6px}
 .photo-zone{position:relative;aspect-ratio:4/3;max-width:100%;border-radius:18px;overflow:hidden;background:#081218;border:1px solid var(--line)}
+.photo-zone{touch-action:none}
+.photo-sel{position:absolute;border:2px solid var(--accent);background:rgba(255,207,74,.15);box-shadow:0 0 0 999px rgba(0,0,0,.35);border-radius:4px;pointer-events:none}
 .photo-zone img{width:100%;height:100%;object-fit:contain;display:block}
 .photo-zone .idle{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--muted);text-align:center;padding:16px}
 button.chip{cursor:pointer;color:var(--fg);font-weight:500}
@@ -229,8 +231,9 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
       <h1>Photo</h1>
       <p class="sub">Photographie un produit : l'app lit son nom et crée sa carte, même sans code-barres.</p>
     </header>
-    <div class="photo-zone">
+    <div class="photo-zone" id="photo-zone">
       <img id="photo-preview" alt="Photo du produit" hidden>
+      <div class="photo-sel" id="photo-sel" hidden></div>
       <div class="idle" id="photo-empty">
         <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>
         <span>Cadre bien le nom du produit, de face et bien éclairé.</span>
@@ -240,6 +243,8 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
       <button class="primary" type="button" id="btn-photo-take">Prendre une photo</button>
       <button type="button" id="btn-photo-pick">Choisir une image</button>
     </div>
+    <button type="button" id="btn-photo-zone" hidden>Lire seulement la zone encadrée</button>
+    <p class="hint" id="photo-engine" style="margin:0"></p>
     <input id="photo-take" type="file" accept="image/*" capture="environment" hidden>
     <input id="photo-pick" type="file" accept="image/*" hidden>
     <p class="status" id="photo-status" role="status"></p>
@@ -300,6 +305,23 @@ nav.tabs button[aria-selected="true"]{color:var(--accent)}
       </div>
       <button class="primary" id="btn-save-set">Enregistrer</button>
       <p class="status" id="set-status" role="status"></p>
+    </div>
+    <div class="panel">
+      <h2>Identification par photo</h2>
+      <label for="set-vision">Méthode
+        <select id="set-vision">
+          <option value="auto">Automatique (Gemini si une clé est réglée)</option>
+          <option value="gemini">Gemini, IA de Google (gratuit avec une clé)</option>
+          <option value="openai">OpenAI Vision (clé OpenAI)</option>
+          <option value="ocr">Lecture du texte sur le téléphone (sans clé)</option>
+        </select>
+      </label>
+      <label for="set-gemini">Clé API Gemini
+        <input id="set-gemini" type="password" autocomplete="off" placeholder="AIza…">
+        <span class="hint">Gratuite : aistudio.google.com/apikey → « Create API key ». Reste sur ce téléphone.</span>
+      </label>
+      <button class="primary" id="btn-save-vision">Enregistrer</button>
+      <p class="status" id="vision-status" role="status"></p>
     </div>
     <div class="panel">
       <h2>Version</h2>
@@ -369,7 +391,7 @@ const LS = {
 };
 function loadRates(){const saved=LS.get("sc_rates",null);if(saved)RARITIES.forEach(r=>{if(typeof saved[r.id]==="number")r.rate=saved[r.id]})}
 loadRates();
-const settings = Object.assign({provider:"pollinations",key:"",model:"gpt-image-1",quality:"low"}, LS.get("sc_settings",{}));
+const settings = Object.assign({provider:"pollinations",key:"",model:"gpt-image-1",quality:"low",vision:"auto",geminiKey:""}, LS.get("sc_settings",{}));
 if(!LS.get("sc_settings",null)||(!settings.key&&settings.provider==="openai"))settings.provider="pollinations";
 const canGenerate=()=>settings.provider==="pollinations"||!!settings.key;
 
@@ -1243,6 +1265,15 @@ $("#btn-save-set").addEventListener("click",()=>{
   settings.provider=$("#set-provider").value;settings.key=$("#set-key").value.trim();settings.model=$("#set-model").value.trim()||"gpt-image-1";settings.quality=$("#set-quality").value;
   LS.set("sc_settings",settings);$("#set-status").textContent="✓ Réglages enregistrés.";
 });
+$("#set-vision").value=settings.vision;$("#set-gemini").value=settings.geminiKey;
+$("#btn-save-vision").addEventListener("click",()=>{
+  settings.vision=$("#set-vision").value;settings.geminiKey=$("#set-gemini").value.trim();
+  LS.set("sc_settings",settings);
+  const st=$("#vision-status");
+  if(settings.vision==="gemini"&&!settings.geminiKey){st.className="status err";st.textContent="Ajoute une clé Gemini pour utiliser cette méthode.";}
+  else{st.className="status";st.textContent="✓ Réglages enregistrés."}
+  if(typeof photoHint==="function")photoHint();
+});
 $("#btn-save-rates").addEventListener("click",()=>{
   const vals={};RARITIES.forEach(r=>{vals[r.id]=parseRate($("#rate-"+r.id).value)});
   saveRates(vals);
@@ -1251,7 +1282,7 @@ $("#btn-reset-rates").addEventListener("click",()=>saveRates({...DEFAULT_RATES})
 renderRates();
 
 /* ---------- Version & mises à jour ---------- */
-const APP_VERSION="1.10.0";
+const APP_VERSION="1.11.0";
 function cmpVer(a,b){const x=a.split(".").map(Number),y=b.split(".").map(Number);for(let i=0;i<3;i++){if((x[i]||0)!==(y[i]||0))return (x[i]||0)-(y[i]||0)}return 0}
 async function checkUpdate(manual){
   const st=$("#update-status");
@@ -1378,13 +1409,16 @@ document.addEventListener("visibilitychange",()=>{if(!document.hidden)syncEpoch(
 
 /* ---------- Onglet Photo : identifier un produit sans scanner son code-barres ----------
    1. code-barres visible sur la photo → tirage classique
-   2. sinon : nom lu sur l'emballage (OpenAI Vision si une clé est réglée, sinon OCR Tesseract.js
-      dans le téléphone), corrigeable, puis tirage et illustration comme pour un scan.
+   2. sinon identification du produit, au choix (Réglages → Identification par photo) :
+      - Gemini (Google, offre gratuite avec une clé) : l'IA regarde la photo, le plus fiable
+      - OpenAI Vision (si une clé OpenAI est réglée)
+      - lecture du texte dans le téléphone (Tesseract.js), sans clé ; meilleure si on encadre le nom
    Un produit identifié par photo reçoit un code dérivé de son nom (« 99 » + 12 chiffres) :
    deux joueurs qui photographient le même produit partagent donc les mêmes illustrations. */
 const PHOTO_TYPES=[["alimentation","Alimentation"],["beaute","Beauté"],["animaux","Animaux"],["livre","Livre"],["album","Album"],["autre","Autre"]];
 const TESS_URL="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
-let photoBusy=false;
+const ID_PROMPT='Identify the retail product in this photo. Reply only with JSON: {"name": the product name as printed on it (keep its language), without weight, volume or pack size, "brand": the brand or "", "type": one of "alimentation","beaute","animaux","livre","album","autre", "texts": up to 6 other notable short texts printed on it}.';
+let photoBusy=false,photoImg=null,photoSel=null,tessWorker=null;
 
 async function decodeImageBarcode(img){
   let code=null;
@@ -1392,8 +1426,7 @@ async function decodeImageBarcode(img){
   if(nat){try{const r=await nat.detect(img);if(r.length)code=r[0].rawValue}catch(err){}}
   if(!code&&window.ZXing){
     for(const max of [1600,2400,1000]){
-      const k=Math.min(1,max/Math.max(img.width,img.height)),cv=document.createElement("canvas");
-      cv.width=Math.round(img.width*k);cv.height=Math.round(img.height*k);cv.getContext("2d").drawImage(img,0,0,cv.width,cv.height);
+      const cv=imgToCanvas(img,max);
       code=zxDecodeCanvas(cv)||zxDecodeCanvas(rotated(cv));
       if(code)break;
     }
@@ -1402,52 +1435,146 @@ async function decodeImageBarcode(img){
   code=normalize(code);
   return (code.length===8||gtinOk(code))?code:null;
 }
-function imgToCanvas(img,max){
-  const k=Math.min(1,max/Math.max(img.width,img.height)),cv=document.createElement("canvas");
-  cv.width=Math.round(img.width*k);cv.height=Math.round(img.height*k);cv.getContext("2d").drawImage(img,0,0,cv.width,cv.height);
+function imgToCanvas(img,max,sel){
+  const sx=sel?sel.x*img.width:0,sy=sel?sel.y*img.height:0,sw=sel?sel.w*img.width:img.width,sh=sel?sel.h*img.height:img.height;
+  const k=Math.min(max/Math.max(sw,sh),sel?3:1),cv=document.createElement("canvas");
+  cv.width=Math.max(1,Math.round(sw*k));cv.height=Math.max(1,Math.round(sh*k));
+  cv.getContext("2d").drawImage(img,sx,sy,sw,sh,0,0,cv.width,cv.height);
   return cv;
 }
-function loadScriptOnce(src){
-  return new Promise((res,rej)=>{
-    if(document.querySelector(`script[src="${src}"]`)&&window.Tesseract)return res();
-    const s=document.createElement("script");s.src=src;s.onload=()=>res();s.onerror=()=>rej(new Error("chargement impossible"));document.head.append(s);
-  });
+function parseIdJSON(t){
+  const o=JSON.parse(String(t).replace(/^```(json)?|```$/g,"").trim()||"{}");
+  const type=PHOTO_TYPES.some(x=>x[0]===o.type)?o.type:"autre";
+  return {name:clean(o.name||""),brand:clean(o.brand||""),type,chips:(o.texts||[]).map(x=>clean(String(x))).filter(Boolean).slice(0,8)};
 }
 
-/* Lecture du texte de l'emballage dans le téléphone (gratuit, sans clé) */
-async function ocrIdentify(img,onMsg){
-  onMsg("Chargement du lecteur de texte (la première fois peut prendre un moment)…");
-  await loadScriptOnce(TESS_URL);
-  if(!window.Tesseract)throw new Error("Le lecteur de texte n'a pas pu se charger.");
-  const cv=imgToCanvas(img,1600);
-  const r=await Tesseract.recognize(cv,"fra+eng",{logger:m=>{if(m.status==="recognizing text")onMsg("Lecture du texte… "+Math.round((m.progress||0)*100)+" %")}});
-  const lines=((r.data&&r.data.lines)||[]).map(l=>({
-    text:clean((l.text||"").replace(/[^\p{L}\p{N}&'’ \-]/gu," ")),
-    h:(l.bbox?l.bbox.y1-l.bbox.y0:0),conf:l.confidence||0
-  })).filter(l=>l.conf>=45&&(l.text.match(/\p{L}/gu)||[]).length>=2);
-  // Les plus gros textes de l'emballage sont presque toujours le nom et la marque
-  lines.sort((a,b)=>b.h-a.h);
-  const seen=new Set(),chips=[];
-  for(const l of lines){const k=normKey(l.text);if(!seen.has(k)){seen.add(k);chips.push(l)}}
-  const top=chips.slice(0,8);
-  let name=top[0]?top[0].text:"";
-  if(top[1]&&top[1].h>=top[0].h*0.7)name+=" "+top[1].text;
-  return {name:clean(name),brand:"",type:"autre",chips:top.map(c=>c.text),engine:"Lecture du texte"};
+/* --- Gemini (Google AI Studio) : le modèle « flash » le plus récent disponible pour la clé --- */
+async function geminiModels(){
+  const cached=LS.get("sc_gemini_models",null);
+  if(cached&&cached.key===settings.geminiKey.slice(-6)&&Date.now()-cached.at<7*864e5)return cached.list;
+  const r=await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key="+encodeURIComponent(settings.geminiKey));
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(r.status===400||r.status===403?"Clé Gemini refusée. Vérifie-la dans Réglages.":"Gemini : "+((j.error&&j.error.message)||r.status));
+  const ver=n=>parseFloat((n.match(/gemini-(\d+(\.\d+)?)/)||[])[1]||0);
+  const list=(j.models||[]).filter(m=>/gemini.*flash/.test(m.name)&&!/image|tts|audio|live|thinking|embedding/.test(m.name)&&(m.supportedGenerationMethods||[]).includes("generateContent")).map(m=>m.name.replace("models/",""))
+    .sort((a,b)=>(/latest/.test(b)-/latest/.test(a))||(ver(b)-ver(a))||(/lite/.test(a)-/lite/.test(b))||(/preview|exp/.test(a)-/preview|exp/.test(b)));
+  LS.set("sc_gemini_models",{key:settings.geminiKey.slice(-6),at:Date.now(),list});
+  return list;
+}
+async function geminiIdentify(img,sel){
+  const data=imgToCanvas(img,1280,sel).toDataURL("image/jpeg",.88).split(",")[1];
+  const models=await geminiModels();
+  if(!models.length)throw new Error("Aucun modèle Gemini compatible avec cette clé.");
+  let last="";
+  for(const m of models.slice(0,4)){
+    const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${encodeURIComponent(settings.geminiKey)}`,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({contents:[{parts:[{text:ID_PROMPT},{inline_data:{mime_type:"image/jpeg",data}}]}],generationConfig:{temperature:0.2,responseMimeType:"application/json"}})});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){
+      const t=(((j.candidates||[])[0]||{}).content||{}).parts;
+      if(t&&t[0]&&t[0].text)return {...parseIdJSON(t[0].text),engine:"Gemini"};
+      last="réponse vide";continue;
+    }
+    last=(j.error&&j.error.message)||String(r.status);
+    if(r.status===400&&/API key/i.test(last))throw new Error("Clé Gemini refusée. Vérifie-la dans Réglages.");
+    // 404 / 429 / modèle indisponible : on essaie le suivant
+  }
+  throw new Error(/quota|429|RESOURCE_EXHAUSTED/i.test(last)?"Quota gratuit Gemini atteint pour le moment. Réessaie plus tard.":"Gemini : "+last);
 }
 
-/* Identification par l'IA d'OpenAI (si une clé est réglée) : plus fiable, reconnaît aussi le type */
-async function visionIdentify(img){
-  const url=imgToCanvas(img,1024).toDataURL("image/jpeg",.85);
+/* --- OpenAI Vision (si une clé OpenAI est réglée) --- */
+async function visionIdentify(img,sel){
+  const url=imgToCanvas(img,1024,sel).toDataURL("image/jpeg",.85);
   const r=await fetch("https://api.openai.com/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+settings.key},
-    body:JSON.stringify({model:"gpt-4o-mini",response_format:{type:"json_object"},max_tokens:200,messages:[{role:"user",content:[
-      {type:"text",text:'Identify the product in this photo. Reply only with JSON: {"name": product name as printed on it, without weight, volume or pack size, "brand": brand or "", "type": one of "alimentation","beaute","animaux","livre","album","autre", "texts": up to 6 other notable texts printed on it}.'},
-      {type:"image_url",image_url:{url}}]}]})});
+    body:JSON.stringify({model:"gpt-4o-mini",response_format:{type:"json_object"},max_tokens:200,messages:[{role:"user",content:[{type:"text",text:ID_PROMPT},{type:"image_url",image_url:{url}}]}]})});
   const j=await r.json().catch(()=>({}));
   if(!r.ok)throw new Error(r.status===401?"Clé OpenAI refusée.":"OpenAI : "+((j.error&&j.error.message)||r.status));
-  const o=JSON.parse(j.choices[0].message.content||"{}");
-  const type=PHOTO_TYPES.some(t=>t[0]===o.type)?o.type:"autre";
-  return {name:clean(o.name||""),brand:clean(o.brand||""),type,chips:(o.texts||[]).map(clean).filter(Boolean).slice(0,8),engine:"OpenAI"};
+  return {...parseIdJSON(j.choices[0].message.content),engine:"OpenAI"};
 }
+
+/* --- Lecture du texte dans le téléphone (gratuit, sans clé) ---
+   Image agrandie, passée en niveaux de gris et contrastée, lue en normal puis en négatif
+   (textes clairs sur fond foncé), les deux lectures sont fusionnées. */
+function loadScriptOnce(src){
+  return new Promise((res,rej)=>{
+    if(window.Tesseract)return res();
+    const s=document.createElement("script");s.src=src;s.onload=()=>res();s.onerror=()=>rej(new Error("Le lecteur de texte n'a pas pu se charger."));document.head.append(s);
+  });
+}
+function prepForOcr(img,sel,invert){
+  const cv=imgToCanvas(img,sel?1800:2000,sel),ctx=cv.getContext("2d",{willReadFrequently:true});
+  const d=ctx.getImageData(0,0,cv.width,cv.height),p=d.data,hist=new Array(256).fill(0);
+  for(let i=0;i<p.length;i+=4){const g=Math.round(.299*p[i]+.587*p[i+1]+.114*p[i+2]);p[i]=g;hist[g]++}
+  // étirement du contraste entre les 2 % les plus sombres et les 2 % les plus clairs
+  const n=p.length/4;let lo=0,hi=255,acc=0;
+  for(let v=0;v<256;v++){acc+=hist[v];if(acc>n*.02){lo=v;break}}
+  acc=0;for(let v=255;v>=0;v--){acc+=hist[v];if(acc>n*.02){hi=v;break}}
+  const span=Math.max(1,hi-lo);
+  for(let i=0;i<p.length;i+=4){let g=Math.min(255,Math.max(0,(p[i]-lo)*255/span));if(invert)g=255-g;p[i]=p[i+1]=p[i+2]=g}
+  ctx.putImageData(d,0,0);
+  return cv;
+}
+async function ocrIdentify(img,sel,onMsg){
+  onMsg("Chargement du lecteur de texte (la première fois peut prendre un moment)…");
+  await loadScriptOnce(TESS_URL);
+  if(!tessWorker)tessWorker=await Tesseract.createWorker("fra+eng");
+  const all=[];
+  for(const [i,inv] of [[1,false],[2,true]]){
+    onMsg("Lecture du texte… ("+i+"/2)");
+    const r=await tessWorker.recognize(prepForOcr(img,sel,inv));
+    ((r.data&&r.data.lines)||[]).forEach(l=>all.push({
+      text:clean((l.text||"").replace(/[^\p{L}\p{N}&'’ \-]/gu," ")),
+      h:(l.bbox?l.bbox.y1-l.bbox.y0:0),conf:l.confidence||0
+    }));
+  }
+  // garde les lignes fiables, avec au moins 3 lettres et une majorité de lettres
+  const ok=all.filter(l=>{const letters=(l.text.match(/\p{L}/gu)||[]).length;return l.conf>=60&&letters>=3&&letters>=l.text.replace(/\s/g,"").length*.6});
+  ok.sort((a,b)=>b.h*b.conf-a.h*a.conf);
+  const seen=new Set(),chips=[];
+  for(const l of ok){const k=normKey(l.text);if(!seen.has(k)){seen.add(k);chips.push(l)}}
+  const top=chips.slice(0,8);
+  let name=top[0]?top[0].text:"";
+  if(!sel&&top[1]&&top[1].h>=top[0].h*0.7)name+=" "+top[1].text;
+  return {name:clean(name),brand:"",type:"autre",chips:top.map(c=>c.text),engine:"lecture du texte"};
+}
+
+/* --- Choix du moteur selon les réglages --- */
+function photoEngine(){
+  const v=settings.vision||"auto";
+  if(v==="gemini"&&settings.geminiKey)return "gemini";
+  if(v==="openai"&&settings.key)return "openai";
+  if(v==="ocr")return "ocr";
+  if(settings.geminiKey)return "gemini";
+  if(settings.provider==="openai"&&settings.key)return "openai";
+  return "ocr";
+}
+async function identify(img,sel,onMsg){
+  const eng=photoEngine();
+  if(eng==="ocr")return ocrIdentify(img,sel,onMsg);
+  onMsg("Identification du produit ("+(eng==="gemini"?"Gemini":"OpenAI")+")…");
+  try{return eng==="gemini"?await geminiIdentify(img,sel):await visionIdentify(img,sel)}
+  catch(e){onMsg(e.message+" Lecture du texte à la place…");const r=await ocrIdentify(img,sel,onMsg);r.note=e.message;return r}
+}
+
+/* --- Recadrage au doigt sur le nom --- */
+function imgBox(){
+  const z=$("#photo-zone").getBoundingClientRect(),im=$("#photo-preview");
+  const s=Math.min(z.width/im.naturalWidth,z.height/im.naturalHeight),w=im.naturalWidth*s,h=im.naturalHeight*s;
+  return {left:z.left+(z.width-w)/2,top:z.top+(z.height-h)/2,w,h};
+}
+(function(){
+  const zone=$("#photo-zone"),box=$("#photo-sel");let start=null;
+  const pt=e=>{const b=imgBox();return {x:Math.min(1,Math.max(0,(e.clientX-b.left)/b.w)),y:Math.min(1,Math.max(0,(e.clientY-b.top)/b.h))}};
+  const draw=(a,b)=>{const bx=imgBox(),z=zone.getBoundingClientRect(),x=Math.min(a.x,b.x),y=Math.min(a.y,b.y),w=Math.abs(a.x-b.x),h=Math.abs(a.y-b.y);
+    box.style.left=(bx.left-z.left+x*bx.w)+"px";box.style.top=(bx.top-z.top+y*bx.h)+"px";box.style.width=(w*bx.w)+"px";box.style.height=(h*bx.h)+"px";box.hidden=false;return {x,y,w,h}};
+  zone.addEventListener("pointerdown",e=>{if(!photoImg||photoBusy)return;start=pt(e);zone.setPointerCapture(e.pointerId);e.preventDefault()});
+  zone.addEventListener("pointermove",e=>{if(start)draw(start,pt(e))});
+  zone.addEventListener("pointerup",e=>{
+    if(!start)return;const sel=draw(start,pt(e));start=null;
+    if(sel.w<.04||sel.h<.02){box.hidden=true;photoSel=null;$("#btn-photo-zone").hidden=true;return}
+    photoSel=sel;$("#btn-photo-zone").hidden=false;
+  });
+})();
 
 /* Code stable dérivé du nom : même produit photographié = même carte pour tous */
 async function nameCode(name){
@@ -1455,31 +1582,37 @@ async function nameCode(name){
   return "99"+(BigInt("0x"+h.slice(0,24))%10n**12n).toString().padStart(12,"0");
 }
 
-async function analysePhoto(file){
-  if(photoBusy)return;photoBusy=true;
+async function runIdentify(sel){
+  if(photoBusy||!photoImg)return;photoBusy=true;
   const st=$("#photo-status"),form=$("#photo-form");
-  form.hidden=true;st.className="status";
+  st.className="status";$("#btn-photo-zone").hidden=true;
   try{
-    const url=URL.createObjectURL(file);
-    $("#photo-preview").src=url;$("#photo-preview").hidden=false;$("#photo-empty").hidden=true;
-    const img=await loadImg(url);
-    if(!img)throw new Error("Impossible d'ouvrir cette photo.");
-    st.textContent="Recherche d'un code-barres…";
-    const code=await decodeImageBarcode(img);
-    if(code){st.textContent="Code-barres "+code+" trouvé sur la photo.";photoBusy=false;return draw(code)}
-    const useAI=settings.provider==="openai"&&!!settings.key;
-    st.textContent=useAI?"Identification du produit…":"Lecture du nom sur l'emballage…";
-    let res;
-    try{res=useAI?await visionIdentify(img):await ocrIdentify(img,m=>{st.textContent=m})}
-    catch(e){if(!useAI)throw e;res=await ocrIdentify(img,m=>{st.textContent=m})}
-    $("#photo-name").value=res.name;$("#photo-brand").value=res.brand;$("#photo-type").value=res.type;
-    $("#photo-chips").replaceChildren(...res.chips.map(t=>el("button",{type:"button",class:"chip",onclick:()=>{const n=$("#photo-name");n.value=clean((n.value+" "+t));n.focus()}},t)));
+    const res=await identify(photoImg,sel,m=>{st.textContent=m});
+    $("#photo-name").value=res.name;
+    if(res.brand||!sel)$("#photo-brand").value=res.brand;
+    if(res.type!=="autre"||!sel)$("#photo-type").value=res.type;
+    $("#photo-chips").replaceChildren(...res.chips.map(t=>el("button",{type:"button",class:"chip",onclick:()=>{const n=$("#photo-name");n.value=clean(n.value+" "+t);n.focus()}},t)));
     $("#photo-chips-wrap").hidden=!res.chips.length;
     form.hidden=false;
-    st.textContent=res.name?"Vérifie le nom proposé ("+res.engine+"), puis crée la carte.":"Aucun nom lisible : tape le nom du produit.";
+    const tip=res.engine==="lecture du texte"&&!sel?" Si le nom est mal lu, encadre-le au doigt sur la photo.":"";
+    st.textContent=(res.note?res.note+" ":"")+(res.name?"Nom proposé par "+res.engine+" : vérifie-le, puis crée la carte.":"Aucun nom lisible : tape le nom du produit.")+tip;
     if(!res.name)$("#photo-name").focus();
-  }catch(e){st.className="status err";st.textContent=e.message+" Tu peux aussi taper le nom ci-dessous.";form.hidden=false;$("#photo-chips-wrap").hidden=true}
+  }catch(e){st.className="status err";st.textContent=e.message+" Tu peux taper le nom ci-dessous.";form.hidden=false;$("#photo-chips-wrap").hidden=true}
   finally{photoBusy=false}
+}
+async function analysePhoto(file){
+  if(photoBusy)return;
+  const st=$("#photo-status");
+  $("#photo-form").hidden=true;$("#photo-sel").hidden=true;$("#btn-photo-zone").hidden=true;photoSel=null;st.className="status";
+  const url=URL.createObjectURL(file);
+  $("#photo-preview").src=url;$("#photo-preview").hidden=false;$("#photo-empty").hidden=true;
+  photoImg=await loadImg(url);
+  if(!photoImg){st.className="status err";st.textContent="Impossible d'ouvrir cette photo.";return}
+  photoBusy=true;st.textContent="Recherche d'un code-barres…";
+  let code=null;try{code=await decodeImageBarcode(photoImg)}catch(e){}
+  photoBusy=false;
+  if(code){st.textContent="Code-barres "+code+" trouvé sur la photo.";return draw(code)}
+  runIdentify(null);
 }
 
 async function drawFromPhoto(name,brand,type){
@@ -1502,6 +1635,7 @@ async function drawFromPhoto(name,brand,type){
 
 $("#btn-photo-take").addEventListener("click",()=>$("#photo-take").click());
 $("#btn-photo-pick").addEventListener("click",()=>$("#photo-pick").click());
+$("#btn-photo-zone").addEventListener("click",()=>runIdentify(photoSel));
 for(const id of ["#photo-take","#photo-pick"])$(id).addEventListener("change",e=>{const f=e.target.files&&e.target.files[0];e.target.value="";if(f)analysePhoto(f)});
 $("#photo-form").addEventListener("submit",e=>{
   e.preventDefault();
@@ -1509,9 +1643,11 @@ $("#photo-form").addEventListener("submit",e=>{
   if(!name){const st=$("#photo-status");st.className="status err";st.textContent="Donne un nom au produit.";return}
   drawFromPhoto(name,clean($("#photo-brand").value),$("#photo-type").value);
 });
-
-
-
+function photoHint(){
+  const eng=photoEngine();
+  $("#photo-engine").textContent=eng==="gemini"?"Identification : Gemini (IA de Google).":eng==="openai"?"Identification : OpenAI Vision.":"Identification : lecture du texte sur le téléphone. Pour une reconnaissance bien plus fiable, ajoute une clé Gemini gratuite dans Réglages.";
+}
+photoHint();
 </script>
 
 </body>

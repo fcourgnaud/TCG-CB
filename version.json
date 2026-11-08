@@ -1,4 +1,4 @@
 {
-  "version": "1.10.0",
-  "notes": "nouvel onglet Photo : identifier un produit par son nom sur la photo"
+  "version": "1.11.0",
+  "notes": "photo : identification par Gemini (gratuit) et lecture du texte améliorée avec recadrage"
 }
